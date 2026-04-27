@@ -10,5 +10,7 @@ async def extract_text(
     file: UploadFile = File(...),
     service: PdfExtractionService = Depends(get_pdf_service)
 ):
+    # Leemos el contenido del archivo subido
     content = await file.read()
+    # Delegamos al servicio la lógica de negocio
     return service.process_pdf(file.filename, content)

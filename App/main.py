@@ -1,10 +1,15 @@
 from fastapi import FastAPI
 from App.api.routers import extract_router
+from App.core.config import settings
 
-app = FastAPI(title="PDF Text Extractor API")
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    version=settings.VERSION
+)
 
+# Esta es la línea clave que "conecta" los endpoints al servidor
 app.include_router(extract_router.router, prefix="/api")
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+@app.get("/")
+def read_root():
+    return {"message": "PDFtrack API is running"}
