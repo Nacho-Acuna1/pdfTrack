@@ -3,9 +3,9 @@ name = "pdftrack"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.136.1",
+    "fastapi>=0.112.0",
     "motor>=3.7.1",
     "pydantic>=2.13.3",
     "pydantic-settings>=2.14.0",
