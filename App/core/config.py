@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings
 from pydantic import ConfigDict
 
+#configuracion
 class Settings(BaseSettings):
     PROJECT_NAME: str = "PDFExtractxt"
     VERSION: str = "1.0.0"

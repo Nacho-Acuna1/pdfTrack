@@ -4,6 +4,7 @@ from App.core.config import settings
 from typing import Optional, List
 from bson.objectid import ObjectId
 
+#mongo
 class MongoDocumentRepository(IDocumentRepository):
     def __init__(self):
         self.client = AsyncIOMotorClient(settings.MONGO_URI)

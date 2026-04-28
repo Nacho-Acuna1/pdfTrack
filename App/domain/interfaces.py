@@ -1,6 +1,7 @@
 from typing import Protocol, List, Optional
 from App.domain.models import ExtractedPage
 
+#clase de ip
 class IPdfExtractor(Protocol):
     def extract_text(self, file_bytes: bytes) -> List[ExtractedPage]:
         ...

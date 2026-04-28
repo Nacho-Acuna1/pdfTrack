@@ -2,6 +2,7 @@ from App.infrastructure.pymupdf_extractor import PyMuPdfExtractor
 from App.infrastructure.mongo_repository import MongoDocumentRepository
 from App.services.pdf_service import PdfExtractionService
 
+#dependencias
 def get_pdf_service() -> PdfExtractionService:
     extractor = PyMuPdfExtractor()
     repository = MongoDocumentRepository() # Instanciamos la conexión a Mongo

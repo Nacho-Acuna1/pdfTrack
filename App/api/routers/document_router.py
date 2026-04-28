@@ -6,6 +6,7 @@ from App.domain.interfaces import IDocumentRepository
 
 router = APIRouter(prefix="/v1/documents", tags=["Documents CRUD"])
 
+#documento router
 @router.get("/")
 async def list_documents(repo: IDocumentRepository = Depends(get_document_repository)):
     """Lista todos los PDFs procesados."""

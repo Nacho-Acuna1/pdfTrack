@@ -5,6 +5,7 @@ from App.domain.models import PdfExtractionResponse
 
 router = APIRouter(prefix="/v1")
 
+#router
 @router.post("/extract-text", response_model=PdfExtractionResponse)
 async def extract_text(
     file: UploadFile = File(...),
