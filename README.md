@@ -1,3 +1,9 @@
+### Integrantes:
+
+- Joaquín Sportorno.
+- Lucía Berón.
+- Adriel Acuña.
+
 # PDFtrack API - Etapa 1
 
 Aplicación web para la extracción de texto desde archivos PDF, desarrollada con FastAPI y MongoDB, cumpliendo con los requerimientos de la Etapa N° 1 del Proyecto de Desarrollo de Software.
@@ -41,12 +47,19 @@ El servicio estará disponible en `http://localhost:8000/docs`.
 - Modelo de IA (a definir)
 - Ollama (opcional, a definir a futuro)
 - Base de datos no relacional MongoDB
+- FastAPI
+- Docker
+- PDFminer.six
 
 ## Metodologías: 
 
 - TDD
 - Proyecto digirido en Github
 - Los seis primeros principios de 12 factor APP
+- Design Patterns
+- Arquitectura Hexagonal
+- SOLID
+- Clean Code
 
 ## Principios de programación:
 
