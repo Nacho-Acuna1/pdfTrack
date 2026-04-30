@@ -1,38 +1,46 @@
 from fastapi import APIRouter, Depends, HTTPException
-from typing import List
-# Reutilizamos el repositorio inyectado
-from App.api.dependencies import get_document_repository 
-from App.domain.interfaces import IDocumentRepository
+from App.api.dependencies import get_pdf_service
+from App.services.pdf_service import PdfExtractionService
 
+# Este prefix se suma al "/api" de main.py, formando "/api/v1/documents"
 router = APIRouter(prefix="/v1/documents", tags=["Documents CRUD"])
 
-#documento router
 @router.get("/")
-async def list_documents(repo: IDocumentRepository = Depends(get_document_repository)):
-    """Lista todos los PDFs procesados."""
-    docs = await repo.get_all()
-    return {"total": len(docs), "documents": docs}
+async def list_documents(service: PdfExtractionService = Depends(get_pdf_service)):
+    """Devuelve la lista de todos los documentos guardados."""
+    # Accedemos a la base de datos a través del repositorio inyectado en el servicio
+    documents = await service.repository.list_all()
+    return documents
 
-@router.get("/{doc_id}")
-async def get_document(doc_id: str, repo: IDocumentRepository = Depends(get_document_repository)):
-    """Trae el detalle de un PDF por su ID."""
-    doc = await repo.get_by_id(doc_id)
+@router.get("/{document_id}")
+async def get_document_by_id(document_id: str, service: PdfExtractionService = Depends(get_pdf_service)):
+    """Busca un documento específico por su ID."""
+    doc = await service.repository.get_by_id(document_id)
+    
+    # Esta es la validación exacta que busca el test: test_get_document_by_id_not_found
     if not doc:
         raise HTTPException(status_code=404, detail="Documento no encontrado")
+    
     return doc
 
-@router.patch("/{doc_id}")
-async def update_document(doc_id: str, new_filename: str, repo: IDocumentRepository = Depends(get_document_repository)):
-    """Actualiza el nombre del archivo guardado."""
-    success = await repo.update(doc_id, {"filename": new_filename})
-    if not success:
-        raise HTTPException(status_code=404, detail="Documento no encontrado o sin cambios")
-    return {"message": "Documento actualizado correctamente"}
+@router.patch("/{document_id}")
+async def update_document(document_id: str, new_filename: str, service: PdfExtractionService = Depends(get_pdf_service)):
+    """Actualiza el nombre de un archivo existente."""
+    # Verificamos si existe primero
+    existing_doc = await service.repository.get_by_id(document_id)
+    if not existing_doc:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    
+    # Actualizamos el documento
+    updated_doc = await service.repository.update(document_id, {"filename": new_filename})
+    return updated_doc
 
-@router.delete("/{doc_id}")
-async def delete_document(doc_id: str, repo: IDocumentRepository = Depends(get_document_repository)):
-    """Elimina un documento de la base de datos."""
-    success = await repo.delete(doc_id)
+@router.delete("/{document_id}")
+async def delete_document(document_id: str, service: PdfExtractionService = Depends(get_pdf_service)):
+    """Borra un documento de la base de datos."""
+    success = await service.repository.delete(document_id)
+    
     if not success:
         raise HTTPException(status_code=404, detail="Documento no encontrado")
+        
     return {"message": "Documento eliminado correctamente"}

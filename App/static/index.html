@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>PDF Extractor - UTN</title>
+    <style>
+        body { font-family: sans-serif; margin: 40px; background: #f4f4f9; }
+        .card { background: white; padding: 20px; border-radius: 8px; border: 1px solid #ccc; margin-bottom: 20px; }
+        pre { background: #272822; color: #f8f8f2; padding: 15px; border-radius: 5px; overflow: auto; max-height: 400px; }
+        button { background: #0056b3; color: white; border: none; padding: 10px 20px; cursor: pointer; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <h1>PDF Extractor - UTN</h1>
+
+    <div class="card">
+        <h3>1. Extraer Contenido</h3>
+        <input type="file" id="archivoPdf" accept=".pdf">
+        <button onclick="enviarAPython()">Procesar PDF</button>
+        <div id="resultadoContenedor" style="display:none; margin-top:15px;">
+            <pre id="resultadoTexto"></pre>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>2. Buscador Dinámico</h3>
+        <input type="text" id="busqueda" placeholder="Palabra a buscar...">
+        <button onclick="buscarTexto()">Buscar</button>
+        <div id="resultadosBusqueda"></div>
+    </div>
+
+    <script>
+        let datosJson = null;
+        let nombreArchivo = "";
+
+        async function enviarAPython() {
+            const input = document.getElementById('archivoPdf');
+            if (input.files.length === 0) return alert("Selecciona un PDF");
+            
+            const archivo = input.files[0];
+            const formData = new FormData();
+            formData.append('file', archivo);
+
+            // LLAMADA AL BACKEND
+            const respuesta = await fetch('/api/v1/extract-text', { 
+                method: 'POST', 
+                body: formData 
+            });
+
+            if (respuesta.ok) {
+                datosJson = await respuesta.json();
+                nombreArchivo = archivo.name;
+                document.getElementById('resultadoContenedor').style.display = "block";
+                document.getElementById('resultadoTexto').innerText = JSON.stringify(datosJson, null, 2);
+            } else {
+                alert("Error: No se encontró la ruta en el servidor (404)");
+            }
+        }
+
+        function buscarTexto() {
+            const query = document.getElementById('busqueda').value.toLowerCase();
+            const resDiv = document.getElementById('resultadosBusqueda');
+            if (!datosJson) return alert("Primero procesa un PDF");
+
+            const textoCompleto = JSON.stringify(datosJson).toLowerCase();
+            const coincidencias = (textoCompleto.match(new RegExp(query, 'g')) || []).length;
+
+            resDiv.innerHTML = `<div style="background:#e7f3ff; padding:10px; margin-top:10px; border-left:4px solid blue;">
+                <b>Archivo:</b> ${nombreArchivo} | <b>Coincidencias:</b> ${coincidencias}
+            </div>`;
+        }
+    </script>
+</body>
+</html>

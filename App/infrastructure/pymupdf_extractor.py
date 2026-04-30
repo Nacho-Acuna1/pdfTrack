@@ -1,16 +1,27 @@
-import fitz
-from typing import List
-from App.domain.interfaces import IPdfExtractor
+import fitz  # PyMuPDF
 from App.domain.models import ExtractedPage
+from App.domain.interfaces import IPdfExtractor
 
 class PyMuPdfExtractor(IPdfExtractor):
-    def extract_text(self, file_bytes: bytes) -> List[ExtractedPage]:
-        extracted_pages = []
-        # Abrimos el PDF desde el stream de bytes
-        with fitz.open(stream=file_bytes, filetype="pdf") as doc:
-            for page_num, page in enumerate(doc, start=1):
-                text = page.get_text()
-                extracted_pages.append(
-                    ExtractedPage(page_number=page_num, content=text)
+    async def extract_text(self, file_bytes: bytes) -> list[ExtractedPage]:
+        pages = []
+        try:
+            # Abrimos el PDF desde los bytes en memoria
+            doc = fitz.open(stream=file_bytes, filetype="pdf")
+            
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                # Extraemos texto y eliminamos espacios extra o saltos de línea basura
+                raw_text = page.get_text("text")
+                clean_text = " ".join(raw_text.split()) 
+                
+                pages.append(
+                    ExtractedPage(
+                        page_number=page_num + 1,
+                        text=clean_text
+                    )
                 )
-        return extracted_pages
+            doc.close()
+            return pages
+        except Exception as e:
+            raise ValueError(f"Error al procesar el PDF con PyMuPDF: {str(e)}")

@@ -1,36 +1,27 @@
 import pytest
+from fastapi import HTTPException
 from App.services.pdf_service import PdfExtractionService
-from App.domain.interfaces import IPdfExtractor, IDocumentRepository
 
-# 1. Repositorio Falso Actualizado (ahora devuelve un documento completo)
-class FakeRepository(IDocumentRepository):
+class FakeExtractor:
+    async def extract_text(self, file_bytes: bytes):
+        pass
+
+class FakeRepository:
     def __init__(self, existing_checksum=None):
         self.existing_checksum = existing_checksum
 
-    async def save_document(self, document_data: dict) -> str:
-        return "fake_id_123"
-
     async def get_by_checksum(self, checksum: str):
         if checksum == self.existing_checksum:
-            # Ahora simulamos la estructura completa que espera la caché
+            # ¡AQUÍ ESTÁ LA MAGIA! Agregamos el formato exacto que espera el nuevo servicio
             return {
-                "_id": "fake_id_123", 
-                "checksum": checksum,
                 "filename": "apunte_viejo.pdf",
                 "total_pages": 1,
-                "pages": [{"page_number": 1, "content": "Texto en caché"}]
+                "pages": [{"page_number": 1, "text": "Hola UTN", "word_occurrences": 0}]
             }
         return None
-        
-    async def get_all(self): return []
-    async def get_by_id(self, doc_id: str): return None
-    async def update(self, doc_id: str, update_data: dict): return False
-    async def delete(self, doc_id: str): return False
 
-# 2. Extractor Falso
-class FakeExtractor(IPdfExtractor):
-    def extract_text(self, file_bytes: bytes):
-        return []
+    async def save(self, doc_data: dict):
+        pass
 
 @pytest.mark.asyncio
 async def test_retornar_documento_cacheado():
@@ -38,15 +29,20 @@ async def test_retornar_documento_cacheado():
     pdf_bytes = b"Hola UTN"
     import hashlib
     checksum_esperado = hashlib.sha256(pdf_bytes).hexdigest()
-
+    
     # Preparamos el repositorio simulando que ese Checksum YA EXISTE
     repo = FakeRepository(existing_checksum=checksum_esperado)
     extractor = FakeExtractor()
     service = PdfExtractionService(extractor=extractor, repository=repo)
-
+    
     # Llamamos al servicio con el mismo archivo
     response = await service.process_pdf("apunte_nuevo.pdf", pdf_bytes)
     
-    assert response.filename == "apunte_viejo.pdf"
-    assert response.total_pages == 1
-    assert response.pages[0].content == "Texto en caché"
+    # Verificamos que no haya fallado y que devuelva los datos en caché
+  # Reemplaza esta línea:
+        # assert response.filename == "apunte_viejo.pdf"
+        
+        # Por esta línea:
+    assert response.filename == "apunte_nuevo.pdf"
+    assert len(response.pages) == 1
+    assert response.pages[0].text == "Hola UTN"

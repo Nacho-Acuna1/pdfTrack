@@ -1,53 +1,51 @@
-from motor.motor_asyncio import AsyncIOMotorClient
+from bson import ObjectId
 from App.domain.interfaces import IDocumentRepository
-from App.core.config import settings
-from typing import Optional, List
-from bson.objectid import ObjectId
 
-#mongo
 class MongoDocumentRepository(IDocumentRepository):
-    def __init__(self):
-        self.client = AsyncIOMotorClient(settings.MONGO_URI)
-        self.db = self.client[settings.DB_NAME]
-        self.collection = self.db["documents"]
+    def __init__(self, db_client):
+        # Seleccionamos la colección 'documents' dentro de la base de datos
+        self.collection = db_client["documents"]
 
-    async def save_document(self, document_data: dict) -> str:
-        result = await self.collection.insert_one(document_data)
-        return str(result.inserted_id)
+    async def get_by_checksum(self, checksum: str):
+        return await self.collection.find_one({"checksum": checksum})
 
-    async def get_by_checksum(self, checksum: str) -> Optional[dict]:
-        document = await self.collection.find_one({"checksum": checksum})
-        return document
+    async def save(self, doc_data: dict):
+        await self.collection.insert_one(doc_data)
 
-    async def get_all(self) -> List[dict]:
-        cursor = self.collection.find({})
-        documents = await cursor.to_list(length=100)
-        for doc in documents:
-            doc["_id"] = str(doc["_id"])
-        return documents
+    # --- MÉTODOS DEL CRUD ---
+    async def list_all(self):
+        """Devuelve todos los documentos guardados (solo info básica, sin el texto gigante)"""
+        cursor = self.collection.find({}, {"_id": 1, "filename": 1, "total_pages": 1})
+        return [{"id": str(doc["_id"]), "filename": doc["filename"], "total_pages": doc.get("total_pages", 0)} async for doc in cursor]
 
-    async def get_by_id(self, doc_id: str) -> Optional[dict]:
+    async def get_by_id(self, document_id: str):
+        """Busca un documento específico por su ID"""
         try:
-            doc = await self.collection.find_one({"_id": ObjectId(doc_id)})
+            doc = await self.collection.find_one({"_id": ObjectId(document_id)})
             if doc:
-                doc["_id"] = str(doc["_id"])
+                doc["id"] = str(doc["_id"])
+                del doc["_id"]
             return doc
         except Exception:
-            return None # Si el ID tiene un formato inválido, devolvemos None
+            return None # Si el ID no es válido o no existe
 
-    async def update(self, doc_id: str, update_data: dict) -> bool:
+    async def update(self, document_id: str, update_data: dict):
+        """Actualiza un documento (ej. cambiarle el nombre)"""
         try:
             result = await self.collection.update_one(
-                {"_id": ObjectId(doc_id)}, 
+                {"_id": ObjectId(document_id)},
                 {"$set": update_data}
             )
-            return result.modified_count > 0
+            if result.modified_count:
+                return await self.get_by_id(document_id)
+            return None
         except Exception:
-            return False
+            return None
 
-    async def delete(self, doc_id: str) -> bool:
+    async def delete(self, document_id: str):
+        """Borra un documento de la base de datos"""
         try:
-            result = await self.collection.delete_one({"_id": ObjectId(doc_id)})
+            result = await self.collection.delete_one({"_id": ObjectId(document_id)})
             return result.deleted_count > 0
         except Exception:
             return False
