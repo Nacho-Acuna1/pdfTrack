@@ -1,0 +1,52 @@
+services:
+  proxy:
+    image: nginx:1.27-alpine
+    ports:
+      - "${PUBLIC_PORT:-8000}:80"
+    environment:
+      NGINX_ENVSUBST_FILTER: ^(API_READ_TIMEOUT|MAX_BODY_SIZE)$
+      API_READ_TIMEOUT: ${PROXY_READ_TIMEOUT:-310s}
+      MAX_BODY_SIZE: ${PROXY_MAX_BODY_SIZE:-11m}
+    volumes:
+      - ./deploy/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+    cpus: 0.25
+    mem_limit: 128m
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      HTTP_WORKERS: ${HTTP_WORKERS:-1}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-10}
+      EXTRACTION_WORKERS: ${EXTRACTION_WORKERS:-1}
+      EXTRACTION_QUEUE_SIZE: ${EXTRACTION_QUEUE_SIZE:-1}
+      QUEUE_WAIT_TIMEOUT_SECONDS: ${QUEUE_WAIT_TIMEOUT_SECONDS:-0}
+      EXTRACTION_TIMEOUT_SECONDS: ${EXTRACTION_TIMEOUT_SECONDS:-30}
+      OVERLOAD_STATUS_CODE: ${OVERLOAD_STATUS_CODE:-503}
+      MONGODB_ENABLED: "false"
+    expose:
+      - "8000"
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 35s
+    cpus: 1.0
+    mem_limit: 768m
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M

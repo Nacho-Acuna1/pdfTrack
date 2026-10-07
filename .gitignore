@@ -142,6 +142,10 @@ pyvenv.cfg
 # add migration files
 migrations/
 
+# Local benchmark outputs and official input PDFs (distributed separately)
+tests/stress/results/
+tests/stress/pdfs/*.pdf
+
 
 # Snyk Security Extension - AI Rules (auto-generated)
 .github/instructions/snyk_rules.instructions.md

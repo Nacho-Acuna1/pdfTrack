@@ -1,0 +1,11 @@
+.git
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.coverage
+.env
+tests
+docs
+tests/stress/results
+tests/stress/pdfs/*.pdf
