@@ -1,16 +1,11 @@
-from fastapi import FastAPI
-from App.api.routers import extract_router, document_router
+"""Backward-compatible entry point for the extraction microservice.
 
-app = FastAPI(
-    title="PDFtrack API",
-    description="API para extracción de texto de PDFs con Arquitectura Limpia",
-    version="1.0.0"
-)
+New deployments should start ``services.extractor.main:app`` explicitly. The
+alias keeps the original local command working without joining the document
+routes and the CPU-intensive extraction runtime in the same process.
+"""
 
-# Conectamos AMBAS rutas a la aplicación principal
-app.include_router(extract_router.router, prefix="/api")
-app.include_router(document_router.router, prefix="/api")  # <-- ¡ESTA LÍNEA ES LA CLAVE PARA EL CRUD!
+from services.extractor.main import app
 
-@app.get("/")
-def root():
-    return {"message": "PDFtrack API is running"}
+
+__all__ = ["app"]

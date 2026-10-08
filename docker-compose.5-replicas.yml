@@ -1,4 +1,4 @@
 services:
-  api:
+  extractor:
     deploy:
       replicas: 5

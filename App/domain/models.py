@@ -12,3 +12,8 @@ class PdfExtractionResponse(BaseModel):
     pages: List[ExtractedPage]
     total_occurrences: int = 0
     search_term: Optional[str] = None
+
+
+class ExtractionResponse(BaseModel):
+    content: str
+    page_count: int

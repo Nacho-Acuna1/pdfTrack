@@ -3,7 +3,6 @@ from App.domain.interfaces import IDocumentRepository
 
 class MongoDocumentRepository(IDocumentRepository):
     def __init__(self, db_client):
-        # Seleccionamos la colección 'documents' dentro de la base de datos
         self.collection = db_client["documents"]
 
     async def get_by_checksum(self, checksum: str):
@@ -12,9 +11,8 @@ class MongoDocumentRepository(IDocumentRepository):
     async def save(self, doc_data: dict):
         await self.collection.insert_one(doc_data)
 
-    # --- MÉTODOS DEL CRUD ---
     async def list_all(self):
-        """Devuelve todos los documentos guardados (solo info básica, sin el texto gigante)"""
+        """Return document metadata without the potentially large page content."""
         cursor = self.collection.find({}, {"_id": 1, "filename": 1, "total_pages": 1})
         return [{"id": str(doc["_id"]), "filename": doc["filename"], "total_pages": doc.get("total_pages", 0)} async for doc in cursor]
 
@@ -27,7 +25,7 @@ class MongoDocumentRepository(IDocumentRepository):
                 del doc["_id"]
             return doc
         except Exception:
-            return None # Si el ID no es válido o no existe
+            return None
 
     async def update(self, document_id: str, update_data: dict):
         """Actualiza un documento (ej. cambiarle el nombre)"""

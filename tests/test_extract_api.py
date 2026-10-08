@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from App.api.dependencies import get_extraction_runtime
 from App.core.config import settings
 from App.domain.exceptions import ExtractionOverloadedError
-from App.main import app
+from services.extractor.main import app
 
 
 def test_extract_multipart_contract_page_count_and_markdown(two_page_pdf):
@@ -118,3 +118,10 @@ def test_health_checks():
 
     assert ready.status_code == 200
     assert ready.json()["status"] == "ready"
+
+
+def test_extractor_does_not_expose_document_routes():
+    with TestClient(app) as client:
+        response = client.get("/api/v1/documents/")
+
+    assert response.status_code == 404

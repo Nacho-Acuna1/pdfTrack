@@ -1,9 +1,15 @@
-# PDFtrack - PDF a Markdown bajo carga
+# PDFtrack - microservicios para PDF bajo carga
 
-Microservicio FastAPI que recibe un PDF y devuelve su texto como una única
-cadena Markdown. La ruta evaluable `POST /extract` no depende de MongoDB, no
-escribe el PDF en disco y ejecuta el trabajo CPU-intensivo en un pool de
-procesos acotado.
+PDFtrack está dividido en **dos microservicios FastAPI desplegables por
+separado**, publicados detrás de Nginx:
+
+- `pdftrack-extractor`: recibe un PDF y devuelve su texto como una única cadena
+  Markdown mediante `POST /extract`.
+- `pdftrack-documents`: conserva el contrato heredado de extracción, caché y
+  CRUD documental bajo `/api/v1`.
+
+La ruta evaluable no depende de MongoDB, no escribe el PDF en disco y ejecuta
+el trabajo CPU-intensivo en un pool de procesos acotado.
 
 ## Contrato público
 
@@ -39,22 +45,34 @@ por backpressure (configurable) y `504` por timeout de extracción.
 ## Arquitectura
 
 ```text
-cliente -> Nginx (least_conn) -> réplica FastAPI
-                                  |-- admisión/cola acotada
-                                  |-- stream y validación de entrada
-                                  `-- ProcessPoolExecutor -> PyMuPDF
+                              +-> extractor:8000 (1 a 5 réplicas, least_conn)
+cliente -> Nginx:80 ---------+      |-- admisión y cola acotada
+                              |      `-- ProcessPoolExecutor -> PyMuPDF
+                              |
+                              `-> documents:8001 (1 réplica)
+                                     `-- NullRepository o MongoDB opcional
+
+Rutas /extract, /health/* y /docs  -> extractor
+Rutas /api/*                       -> documents
 ```
 
-Cada réplica usa un solo proceso HTTP y, por defecto, un proceso de extracción.
-La capacidad total por réplica es `EXTRACTION_WORKERS +
+Son servicios distintos: tienen puntos de entrada, contratos OpenAPI, procesos,
+contenedores, health checks y límites de recursos independientes. Comparten la
+capa de dominio y algunas bibliotecas para evitar duplicación accidental.
+
+Cada réplica del extractor usa un solo proceso HTTP y, por defecto, un proceso
+de extracción. La capacidad total por réplica es `EXTRACTION_WORKERS +
 EXTRACTION_QUEUE_SIZE`. Al agotarse se rechaza la solicitud de inmediato en vez
 de acumular trabajo que superaría el timeout. El PDF se abre desde bytes en
 memoria; la admisión ocurre antes de leer el multipart, por lo que solo la
 capacidad acotada puede retener esos buffers y no hay archivos temporales de la
 aplicación para PDFs dentro del máximo configurado.
 
-Los endpoints anteriores bajo `/api/v1` se conservan. MongoDB es una caché/CRUD
-opcional y está desactivado por defecto. Su ausencia no afecta `/extract`.
+El servicio `documents` conserva los endpoints anteriores bajo `/api/v1`.
+MongoDB es una caché/CRUD opcional y está desactivado por defecto; en ese caso el
+servicio usa un repositorio nulo sin persistencia. Aunque `documents` se detenga
+o MongoDB no esté disponible, el microservicio `extractor` sigue atendiendo
+`/extract`.
 
 ## Variables de entorno
 
@@ -64,7 +82,8 @@ Copiar `.env.example` a `.env` para personalizar la ejecución local.
 |---|---:|---|
 | `HOST` | `0.0.0.0` | Interfaz HTTP |
 | `PORT` | `8000` | Puerto interno de la API |
-| `HTTP_WORKERS` | `1` | Procesos ASGI por réplica |
+| `HTTP_WORKERS` | `1` | Procesos ASGI por réplica del extractor |
+| `DOCUMENTS_HTTP_WORKERS` | `1` | Procesos ASGI del servicio documental |
 | `LOG_LEVEL` | `INFO` | Nivel de logs JSON a stdout |
 | `MAX_FILE_SIZE_MB` | `10` | Máximo admitido por PDF |
 | `EXTRACTION_WORKERS` | `1` | Procesos CPU por réplica |
@@ -91,8 +110,17 @@ lockfile:
 
 ```bash
 uv sync --frozen
-uv run uvicorn App.main:app --host 0.0.0.0 --port 8000
+uv run uvicorn services.extractor.main:app --host 0.0.0.0 --port 8000
 ```
+
+En otra terminal, levantar el segundo microservicio:
+
+```bash
+uv run uvicorn services.documents.main:app --host 0.0.0.0 --port 8001
+```
+
+`App.main:app` se mantiene como alias compatible del extractor, pero los puntos
+de entrada explícitos anteriores muestran la separación real.
 
 Alternativa con `pip`:
 
@@ -102,7 +130,9 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r App/requirements.txt
 python -m pip install httpx==0.28.1 pytest==9.0.3 pytest-asyncio==1.3.0
-uvicorn App.main:app --host 0.0.0.0 --port 8000
+uvicorn services.extractor.main:app --host 0.0.0.0 --port 8000
+# En otra terminal:
+uvicorn services.documents.main:app --host 0.0.0.0 --port 8001
 ```
 
 Health checks:
@@ -110,7 +140,11 @@ Health checks:
 ```bash
 curl -fsS http://localhost:8000/health/live
 curl -fsS http://localhost:8000/health/ready
+curl -fsS http://localhost:8001/health/ready
 ```
+
+Sin Nginx, la documentación del extractor está en `http://localhost:8000/docs`
+y la del servicio documental en `http://localhost:8001/api/docs`.
 
 ## Docker Compose
 
@@ -128,9 +162,11 @@ docker compose -f docker-compose.yml \
 ```
 
 Solo Nginx publica el puerto `${PUBLIC_PORT:-8000}`. Sus límites de body y
-timeout también se configuran por entorno. Las réplicas no tienen
-nombre fijo ni puerto de host. Cada réplica queda limitada a **1 CPU y 768 MB de
-RAM**; el proxy a 0,25 CPU y 128 MB. Para detener y eliminar los contenedores:
+timeout también se configuran por entorno. Los servicios internos no tienen
+nombre fijo ni puerto de host. Cada réplica de `extractor` queda limitada a
+**1 CPU y 768 MB de RAM**; `documents`, a **0,5 CPU y 512 MB**; el proxy, a
+0,25 CPU y 128 MB. El override escala sólo el servicio CPU-intensivo y mantiene
+una única instancia documental. Para detener y eliminar los contenedores:
 
 ```bash
 docker compose down
@@ -147,7 +183,7 @@ python -m pytest -q
 
 Incluyen contrato/esquema, conteo de páginas, Markdown, ambos formatos de
 entrada, PDF corrupto, vacío, tamaño máximo, backpressure, health checks,
-independencia de MongoDB y compatibilidad CRUD.
+independencia de MongoDB, compatibilidad CRUD y fronteras entre microservicios.
 
 Microbenchmark repetible del extractor (no equivale a k6/Vegeta):
 

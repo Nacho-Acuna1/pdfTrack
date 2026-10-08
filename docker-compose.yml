@@ -10,7 +10,9 @@ services:
     volumes:
       - ./deploy/default.conf.template:/etc/nginx/templates/default.conf.template:ro
     depends_on:
-      api:
+      extractor:
+        condition: service_started
+      documents:
         condition: service_started
     restart: unless-stopped
     cpus: 0.25
@@ -21,11 +23,13 @@ services:
           cpus: "0.25"
           memory: 128M
 
-  api:
+  extractor:
     build:
       context: .
       dockerfile: Dockerfile
+    image: pdftrack-services:local
     environment:
+      SERVICE_MODULE: services.extractor.main:app
       HOST: 0.0.0.0
       PORT: 8000
       HTTP_WORKERS: ${HTTP_WORKERS:-1}
@@ -50,3 +54,33 @@ services:
         limits:
           cpus: "1.0"
           memory: 768M
+
+  documents:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pdftrack-services:local
+    environment:
+      SERVICE_MODULE: services.documents.main:app
+      HOST: 0.0.0.0
+      PORT: 8001
+      HTTP_WORKERS: ${DOCUMENTS_HTTP_WORKERS:-1}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-10}
+      MONGODB_ENABLED: ${MONGODB_ENABLED:-false}
+      MONGODB_URL: ${MONGODB_URL:-mongodb://host.docker.internal:27017}
+      DATABASE_NAME: ${DATABASE_NAME:-pdf_extraction_db}
+      MONGODB_TIMEOUT_MS: ${MONGODB_TIMEOUT_MS:-500}
+    expose:
+      - "8001"
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 10s
+    cpus: 0.5
+    mem_limit: 512m
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M

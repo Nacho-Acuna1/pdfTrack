@@ -2,9 +2,11 @@
 
 ## 1. Alcance y criterio de medición
 
-La solución implementa el contrato obligatorio `POST /extract`, conserva los
-endpoints heredados bajo `/api/v1` y desacopla por completo el benchmark de
-MongoDB. Las pruebas de carga oficiales solo se consideran válidas con los
+La solución separa dos microservicios desplegables: `pdftrack-extractor`
+implementa el contrato obligatorio `POST /extract`, mientras
+`pdftrack-documents` conserva los endpoints heredados bajo `/api/v1`. El
+benchmark queda desacoplado por completo de MongoDB. Las pruebas de carga
+oficiales solo se consideran válidas con los
 cuatro PDFs provistos por la cátedra, bajo los límites de contenedor definidos.
 No se sustituyeron esos archivos por datos sintéticos y no se informan métricas
 de k6 o Vegeta que no hayan sido ejecutadas.
@@ -27,20 +29,28 @@ un caso de caché; ninguna enviaba un PDF real al endpoint.
 
 ```text
                          +-------------------------+
-cliente HTTP ----------> | Nginx:80, least_conn    |
+cliente HTTP ----------> | Nginx:80                |
                          +------------+------------+
                                       |
-                  +-------------------+-------------------+
-                  | hasta 5 réplicas FastAPI sin estado  |
-                  | admisión acotada -> lectura/validación|
-                  | event loop -> ProcessPoolExecutor     |
-                  |                    -> PyMuPDF          |
-                  +---------------------------------------+
-
-MongoDB opcional: únicamente caché/CRUD de endpoints heredados; nunca /extract
+                    +-----------------+------------------+
+                    |                                    |
+        /extract, /health/*, /docs                 /api/*
+                    |                                    |
+      +-------------v----------------+     +-------------v-------------+
+      | pdftrack-extractor           |     | pdftrack-documents        |
+      | 1 a 5 réplicas, least_conn   |     | 1 réplica                 |
+      | admisión y cola acotadas     |     | CRUD/caché heredados      |
+      | ProcessPoolExecutor->PyMuPDF |     | NullRepository o MongoDB  |
+      +------------------------------+     +---------------------------+
 ```
 
-La API reserva primero un slot y luego lee `multipart/form-data` o un cuerpo
+No son dos routers dentro de una misma aplicación: cada microservicio tiene su
+propio punto de entrada ASGI, contrato OpenAPI, proceso, contenedor, health
+check, límite de recursos y ciclo de vida. Comparten código de dominio y
+adaptadores dentro del mismo repositorio para evitar duplicación, pero pueden
+iniciarse y fallar de manera independiente.
+
+El extractor reserva primero un slot y luego lee `multipart/form-data` o un cuerpo
 binario con límite incremental. El umbral de spool se alinea con el máximo
 admitido, de modo que solo la capacidad acotada puede retener PDFs en memoria y
 no se generan temporales de la aplicación. PyMuPDF abre directamente los bytes. El
@@ -75,10 +85,11 @@ permanece ocupado hasta que el trabajo subyacente termina.
 
 ### MongoDB opcional
 
-`/extract` no calcula checksum ni accede a repositorios. Para compatibilidad, el
-flujo anterior usa un repositorio nulo cuando MongoDB está desactivado y degrada
-fallas de caché a logs; la extracción sigue funcionando. El compose final no
-incluye MongoDB porque no es necesario para el trabajo práctico.
+`/extract` pertenece a un proceso que ni siquiera inicializa el cliente MongoDB.
+El servicio documental usa un repositorio nulo cuando MongoDB está desactivado
+y degrada fallas de caché a logs. El compose final no incluye MongoDB porque no
+es necesario para el trabajo práctico; puede conectarse una instancia externa
+mediante variables de entorno.
 
 ### Validación
 
@@ -91,13 +102,13 @@ contrato exitoso contiene exclusivamente `content` y `page_count`.
 
 | Factor aplicable | Implementación |
 |---|---|
-| Base de código | Una aplicación y una imagen reproducible |
+| Base de código | Un repositorio con dos microservicios desplegables y una imagen reproducible parametrizada por punto de entrada |
 | Dependencias | Declaradas en `pyproject.toml`, `uv.lock` y requisitos de runtime fijados |
 | Configuración | Variables de entorno documentadas en `.env.example` |
 | Servicios anexos | MongoDB tratado como recurso opcional, no acoplado a `/extract` |
 | Build/release/run | Dockerfile inmutable y configuración runtime por entorno |
-| Procesos | Réplicas sin estado; no persisten PDFs ni resultados locales |
-| Port binding | Uvicorn expone `PORT`; Nginx publica `PUBLIC_PORT` |
+| Procesos | Dos procesos independientes y réplicas sin estado; no persisten PDFs ni resultados locales |
+| Port binding | Extractor usa 8000, documentos 8001 y Nginx publica `PUBLIC_PORT` |
 | Concurrencia | Escalado horizontal hasta cinco réplicas y pool acotado por réplica |
 | Desechabilidad | Señales gestionadas por Uvicorn, cierre del pool y período de gracia |
 | Paridad | La misma aplicación/configuración se usa localmente y en Docker |
@@ -106,13 +117,16 @@ contrato exitoso contiene exclusivamente `content` y `page_count`.
 
 ## 6. Contenedores y límites
 
-Nginx es el único servicio con puerto de host. Descubre las réplicas `api` por
-DNS interno y distribuye con `least_conn`. No hay `container_name` ni puerto de
-host en las réplicas, por lo que cinco instancias pueden coexistir.
+Nginx es el único servicio con puerto de host. Envía `/api/*` a `documents` y el
+resto a `extractor`; descubre por DNS interno las réplicas del extractor y
+distribuye con `least_conn`. No hay `container_name` ni puerto de host en las
+réplicas, por lo que cinco instancias pueden coexistir.
 
-Cada réplica declara 1 CPU y 768 MB, dentro del rango pedido de 512 MB a 1 GB.
-Nginx tiene 0,25 CPU y 128 MB. La configuración base usa una réplica; el override
-`docker-compose.5-replicas.yml` fija exactamente cinco.
+Cada réplica del extractor declara 1 CPU y 768 MB, dentro del rango pedido de
+512 MB a 1 GB. El servicio documental declara 0,5 CPU y 512 MB. Nginx tiene
+0,25 CPU y 128 MB. La configuración base usa una réplica de cada servicio; el
+override `docker-compose.5-replicas.yml` fija exactamente cinco extractores y
+mantiene un servicio documental.
 
 ## 7. Cuello de botella identificado
 
@@ -140,7 +154,11 @@ dentro del timeout de 30 s.
    la estructura Markdown de páginas, evitando trabajo de layout no exigido.
 7. Se incorporó aislamiento en procesos, cola acotada, timeouts y rechazo.
 8. Se repitió el microbenchmark con el mismo archivo y la misma máquina.
-9. Se agregaron pruebas funcionales/integrales y configuración de carga exacta.
+9. Se separaron los puntos de entrada del extractor y del CRUD documental.
+10. Se agregaron pruebas de frontera para impedir que un servicio exponga las
+    rutas del otro y se validó el balanceo entre cinco extractores.
+11. Se conservaron las pruebas funcionales/integrales y la configuración de
+    carga exacta.
 
 Esta secuencia evita afirmar mejoras por intuición: una variante más costosa fue
 retirada al comprobar su impacto.
@@ -187,8 +205,17 @@ en cuanto se copie exactamente ese set.
 La suite cubre contrato exacto, `application/json`, conteo de páginas, Markdown,
 multipart, binario, MIME inválido, PDF corrupto, archivo vacío, tamaño máximo,
 backpressure determinista, MongoDB ausente, health checks, servicio de caché y
-CRUD heredado. Los logs HTTP incluyen método, ruta, estado y duración; los
-rechazos informan ocupación y causa.
+CRUD heredado. También verifica que `/api/v1` no exista en el extractor, que
+`/extract` no exista en el servicio documental y que sus contratos OpenAPI sean
+distintos. Los logs HTTP incluyen nombre de servicio, método, ruta, estado y
+duración; los rechazos informan ocupación y causa.
+
+En la verificación de infraestructura se levantaron cinco réplicas del
+extractor, una del servicio documental y Nginx. El DNS interno devolvió cinco
+direcciones distintas y un smoke test de diez extracciones concurrentes se
+distribuyó en dos respuestas `200` por cada réplica. Esta comprobación demuestra
+el balanceo, pero no reemplaza los benchmarks oficiales ni se presenta como
+resultado de rendimiento.
 
 El script k6 implementa el spike cerrado 10/20/10 s a 100 VUs y distingue éxito,
 rechazo controlado y falla inesperada. Vegeta usa el modelo abierto exacto de 50
@@ -205,5 +232,6 @@ req/s durante 30 s con timeout de 30 s y rotación secuencial de los cuatro PDFs
 - Los límites deben recalibrarse con las métricas oficiales. Si predominan PDFs
   cercanos a 9 MB, conviene medir memoria RSS por proceso antes de ampliar la
   cola.
-- MongoDB no forma parte del compose final. Si se necesita el CRUD persistente,
-  debe proporcionarse una instancia externa y activar `MONGODB_ENABLED=true`.
+- MongoDB no forma parte del compose final. Si se necesita persistencia en el
+  microservicio documental, debe proporcionarse una instancia externa y activar
+  `MONGODB_ENABLED=true`; el extractor permanece independiente.

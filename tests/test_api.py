@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from App.api.dependencies import get_pdf_service
-from App.main import app
+from services.documents.main import app
 
 
 class FakeRepository:
