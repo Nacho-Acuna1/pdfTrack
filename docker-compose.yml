@@ -32,7 +32,7 @@ services:
       SERVICE_MODULE: services.extractor.main:app
       HOST: 0.0.0.0
       PORT: 8000
-      HTTP_WORKERS: ${HTTP_WORKERS:-1}
+      HTTP_WORKERS: ${HTTP_WORKERS:-2}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-10}
       EXTRACTION_WORKERS: ${EXTRACTION_WORKERS:-1}
@@ -84,3 +84,104 @@ services:
         limits:
           cpus: "0.5"
           memory: 512M
+
+  auth:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pdftrack-services:local
+    environment:
+      SERVICE_MODULE: services.auth.main:app
+      HOST: 0.0.0.0
+      PORT: 8002
+    expose:
+      - "8002"
+    restart: unless-stopped
+    cpus: 0.1
+    mem_limit: 128m
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 128M
+
+  storage:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pdftrack-services:local
+    environment:
+      SERVICE_MODULE: services.storage.main:app
+      HOST: 0.0.0.0
+      PORT: 8003
+    expose:
+      - "8003"
+    restart: unless-stopped
+    cpus: 0.1
+    mem_limit: 128m
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 128M
+
+  audit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pdftrack-services:local
+    environment:
+      SERVICE_MODULE: services.audit.main:app
+      HOST: 0.0.0.0
+      PORT: 8004
+    expose:
+      - "8004"
+    restart: unless-stopped
+    cpus: 0.1
+    mem_limit: 128m
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 128M
+
+  search:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pdftrack-services:local
+    environment:
+      SERVICE_MODULE: services.search.main:app
+      HOST: 0.0.0.0
+      PORT: 8005
+    expose:
+      - "8005"
+    restart: unless-stopped
+    cpus: 0.1
+    mem_limit: 128m
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 128M
+
+  notifier:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pdftrack-services:local
+    environment:
+      SERVICE_MODULE: services.notifier.main:app
+      HOST: 0.0.0.0
+      PORT: 8006
+    expose:
+      - "8006"
+    restart: unless-stopped
+    cpus: 0.1
+    mem_limit: 128m
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 128M
+

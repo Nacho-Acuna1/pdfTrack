@@ -135,8 +135,9 @@ no el transporte HTTP ni MongoDB. El costo crece con páginas, fuentes, gráfico
 y capas internas, no solo con el tamaño en bytes. Bajo un modelo abierto a 50
 req/s, permitir una cola sin límite solo desplaza la falla hacia timeouts y uso
 de memoria. Por ello se priorizó capacidad acotada, procesos aislados y escalado
-horizontal, conservando una ruta de copia única a bytes antes de serializar el
-trabajo al proceso.
+horizontal.
+
+Adicionalmente, se detectó un cuello de botella oculto en la serialización IPC (Pickle) entre Uvicorn y el ProcessPoolExecutor al transferir los bytes del PDF. Para resolverlo, se implementó una arquitectura **Zero-Copy** mediante multiprocessing.shared_memory. Esto permite escribir los bytes del PDF directamente en un bloque de memoria compartida, eliminando la duplicación de buffers en memoria, reduciendo el overhead de CPU por serialización IPC y garantizando máxima eficiencia bajo concurrencia. PyMuPDF lee el PDF directamente desde este segmento de memoria.
 
 No se agregó OCR ni un sistema distribuido de colas: OCR cambia el contrato de
 rendimiento y una cola externa prolongaría solicitudes que ya no serían útiles
@@ -235,3 +236,5 @@ req/s durante 30 s con timeout de 30 s y rotación secuencial de los cuatro PDFs
 - MongoDB no forma parte del compose final. Si se necesita persistencia en el
   microservicio documental, debe proporcionarse una instancia externa y activar
   `MONGODB_ENABLED=true`; el extractor permanece independiente.
+
+

@@ -13,7 +13,7 @@ async def test_runtime_rejects_when_worker_and_queue_are_full():
     started = threading.Event()
     release = threading.Event()
 
-    def blocking_extraction(payload: bytes) -> tuple[str, int]:
+    def blocking_extraction(shm_name: str, size: int) -> tuple[str, int]:
         started.set()
         release.wait(timeout=2)
         return "## Página 1", 1

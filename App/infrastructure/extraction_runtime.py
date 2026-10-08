@@ -10,7 +10,9 @@ from App.domain.exceptions import (
 from App.infrastructure.pymupdf_extractor import extract_pdf_to_markdown
 
 
-ExtractionFunction = Callable[[bytes], tuple[str, int]]
+from multiprocessing.shared_memory import SharedMemory
+
+ExtractionFunction = Callable[[str, int], tuple[str, int]]
 
 
 class ExtractionRuntime:
@@ -60,6 +62,18 @@ class ExtractionRuntime:
     async def extract_admitted(self, file_bytes: bytes) -> tuple[str, int]:
         """Submit bytes after the caller has reserved a capacity slot."""
 
+        size = len(file_bytes)
+        shm = SharedMemory(create=True, size=size)
+        shm.buf[:size] = file_bytes
+
+        def cleanup_shm_and_release(f=None):
+            self._release_slot()
+            try:
+                shm.close()
+                shm.unlink()
+            except Exception:
+                pass
+
         release_on_completion = False
         future = None
 
@@ -67,25 +81,25 @@ class ExtractionRuntime:
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(
                 self._executor,
-                partial(self._extract, file_bytes),
+                partial(self._extract, shm.name, size),
             )
             return await asyncio.wait_for(
                 asyncio.shield(future), timeout=self.extraction_timeout
             )
         except TimeoutError as exc:
             release_on_completion = True
-            future.add_done_callback(lambda _: self._release_slot())
+            future.add_done_callback(cleanup_shm_and_release)
             raise ExtractionTimedOutError(
                 "La extracción excedió el tiempo máximo permitido."
             ) from exc
         except asyncio.CancelledError:
             if future is not None:
                 release_on_completion = True
-                future.add_done_callback(lambda _: self._release_slot())
+                future.add_done_callback(cleanup_shm_and_release)
             raise
         finally:
             if not release_on_completion:
-                self._release_slot()
+                cleanup_shm_and_release()
 
     def release_admission(self) -> None:
         """Release a reservation when validation fails before worker submission."""

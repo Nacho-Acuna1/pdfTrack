@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     HOST=0.0.0.0 \
     PORT=8000 \
-    HTTP_WORKERS=1 \
+    HTTP_WORKERS=2 \
     SERVICE_MODULE=services.extractor.main:app \
     HEALTH_PATH=/health/ready
 

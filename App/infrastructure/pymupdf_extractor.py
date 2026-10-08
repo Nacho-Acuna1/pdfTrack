@@ -14,11 +14,13 @@ def _page_markdown(page: pymupdf.Page, page_number: int) -> str:
     return f"{heading}\n\n{text}" if text else heading
 
 
-def extract_pdf_to_markdown(file_bytes: bytes) -> tuple[str, int]:
+def extract_pdf_to_markdown(shm_name: str, size: int) -> tuple[str, int]:
     """CPU worker entry point; kept at module level so it is process-picklable."""
+    from multiprocessing.shared_memory import SharedMemory
 
+    shm = SharedMemory(name=shm_name)
     try:
-        with pymupdf.open(stream=file_bytes, filetype="pdf") as document:
+        with pymupdf.open(stream=shm.buf[:size], filetype="pdf") as document:
             page_count = document.page_count
             pages = [
                 _page_markdown(document.load_page(index), index + 1)
@@ -26,6 +28,8 @@ def extract_pdf_to_markdown(file_bytes: bytes) -> tuple[str, int]:
             ]
     except Exception as exc:
         raise InvalidPdfError("El archivo no es un PDF válido o está corrupto.") from exc
+    finally:
+        shm.close()
 
     return "\n\n---\n\n".join(pages), page_count
 

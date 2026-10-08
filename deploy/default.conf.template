@@ -12,10 +12,93 @@ upstream pdftrack_documents {
     server documents:8001 resolve;
 }
 
+upstream pdftrack_auth {
+    zone pdftrack_auth 64k;
+    least_conn;
+    server auth:8002 resolve;
+}
+
+upstream pdftrack_storage {
+    zone pdftrack_storage 64k;
+    least_conn;
+    server storage:8003 resolve;
+}
+
+upstream pdftrack_audit {
+    zone pdftrack_audit 64k;
+    least_conn;
+    server audit:8004 resolve;
+}
+
+upstream pdftrack_search {
+    zone pdftrack_search 64k;
+    least_conn;
+    server search:8005 resolve;
+}
+
+upstream pdftrack_notifier {
+    zone pdftrack_notifier 64k;
+    least_conn;
+    server notifier:8006 resolve;
+}
 server {
     listen 80;
     client_max_body_size ${MAX_BODY_SIZE};
 
+    location /api/auth/ {
+        proxy_pass http://pdftrack_auth;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout $;
+        proxy_send_timeout $;
+    }
+
+    location /api/storage/ {
+        proxy_pass http://pdftrack_storage;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout $;
+        proxy_send_timeout $;
+    }
+
+    location /api/audit/ {
+        proxy_pass http://pdftrack_audit;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout $;
+        proxy_send_timeout $;
+    }
+
+    location /api/search/ {
+        proxy_pass http://pdftrack_search;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout $;
+        proxy_send_timeout $;
+    }
+
+    location /api/notifier/ {
+        proxy_pass http://pdftrack_notifier;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout $;
+        proxy_send_timeout $;
+    }
     location /api/ {
         proxy_pass http://pdftrack_documents;
         proxy_http_version 1.1;
@@ -38,3 +121,4 @@ server {
         proxy_send_timeout ${API_READ_TIMEOUT};
     }
 }
+
