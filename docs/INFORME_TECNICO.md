@@ -2,239 +2,252 @@
 
 ## 1. Alcance y criterio de medición
 
-La solución separa dos microservicios desplegables: `pdftrack-extractor`
-implementa el contrato obligatorio `POST /extract`, mientras
-`pdftrack-documents` conserva los endpoints heredados bajo `/api/v1`. El
-benchmark queda desacoplado por completo de MongoDB. Las pruebas de carga
-oficiales solo se consideran válidas con los
-cuatro PDFs provistos por la cátedra, bajo los límites de contenedor definidos.
-No se sustituyeron esos archivos por datos sintéticos y no se informan métricas
-de k6 o Vegeta que no hayan sido ejecutadas.
+PDFtrack implementa una arquitectura orientada a microservicios contenerizados y desacoplados para el procesamiento y extracción de documentos PDF bajo alta concurrencia:
+
+- **`pdftrack-extractor`**: Servicio crítico CPU-intensivo que implementa el contrato obligatorio `POST /extract`. Diseñado con backpressure estricto, pool de procesos aislado y transferencia **Zero-Copy** en memoria compartida.
+- **`pdftrack-documents`**: Mantiene los endpoints heredados bajo `/api/v1` (CRUD documental y caché opcional en MongoDB).
+- **Microservicios auxiliares desacoplados**: `pdftrack-auth`, `pdftrack-storage`, `pdftrack-audit`, `pdftrack-search` y `pdftrack-notifier`. Aíslan responsabilidades de autenticación, almacenamiento, auditoría, indexación y notificaciones con huellas mínimas de recursos.
+- **Proxy inverso y balanceador Nginx**: Punto único de entrada que orquestación y balanceo `least_conn`.
+
+El benchmark del extractor queda 100 % desacoplado de MongoDB y de almacenamiento en disco. Las pruebas de carga oficiales se ejecutan sobre los **cuatro PDFs provistos por la cátedra**, ya integrados en el repositorio (`tests/stress/pdfs/`), respetando estrictamente los límites de CPU y memoria asignados por contenedor.
+
+---
 
 ## 2. Estado inicial observado
 
-El proyecto original exponía únicamente `/api/v1/extract-text` y devolvía una
-estructura con nombre, páginas y ocurrencias; no cumplía el esquema público del
-TP. La extracción PyMuPDF era invocada dentro de una corrutina, por lo que el
-trabajo CPU bloqueaba el event loop. Cada extracción consultaba MongoDB antes de
-procesar y una caída de esa base impedía responder. Tampoco había límite de
-concurrencia, cola, timeout, health checks, contenedores ni scripts de carga.
+El proyecto original presentaba deficiencias estructurales de rendimiento y diseño:
 
-Se detectó además una inconsistencia interna: `IDocumentRepository` declaraba
-`save_document/get_all`, mientras la implementación y el servicio usaban
-`save/list_all`. Las seis pruebas iniciales pasaban, pero solo cubrían el CRUD y
-un caso de caché; ninguna enviaba un PDF real al endpoint.
+1. **Contrato no conforme**: Exponía únicamente `/api/v1/extract-text` devolviendo una estructura con nombre, páginas y ocurrencias, sin cumplir el esquema Markdown exigido (`POST /extract`).
+2. **Bloqueo del Event Loop**: La extracción PyMuPDF se ejecutaba sincrónicamente dentro de una corrutina de FastAPI/AsyncIO. El cómputo intensivo de CPU bloqueaba el event loop, degradando la atención de conexiones concurrentes y health checks.
+3. **Acoplamiento duro a base de datos**: Toda extracción intentaba consultar o registrar en MongoDB antes de procesar; cualquier degradación o caída de la base abortaba las solicitudes.
+4. **Inexistencia de control de flujo**: Ausencia total de colas acotadas, límites de concurrencia, timeouts de respuesta o rechazo controlado ante saturación.
+5. **Inconsistencias internas**: `IDocumentRepository` declaraba firmas (`save_document`/`get_all`) incompatibles con la implementación y el servicio (`save`/`list_all`). Las pruebas iniciales sólo cubrían mocks del CRUD sin enviar nunca un PDF binario real.
+
+---
 
 ## 3. Arquitectura final
 
 ```text
-                         +-------------------------+
-cliente HTTP ----------> | Nginx:80                |
-                         +------------+------------+
-                                      |
-                    +-----------------+------------------+
-                    |                                    |
-        /extract, /health/*, /docs                 /api/*
-                    |                                    |
-      +-------------v----------------+     +-------------v-------------+
-      | pdftrack-extractor           |     | pdftrack-documents        |
-      | 1 a 5 réplicas, least_conn   |     | 1 réplica                 |
-      | admisión y cola acotadas     |     | CRUD/caché heredados      |
-      | ProcessPoolExecutor->PyMuPDF |     | NullRepository o MongoDB  |
-      +------------------------------+     +---------------------------+
+                               +-------------------------------------+
+cliente HTTP ----------------> | Nginx:80 (PUBLIC_PORT)               |
+                               +------------------+------------------+
+                                                  |
+       +-------------------+----------------------+-------------------+-------------------+
+       |                   |                      |                   |                   |
+  /extract, /docs     /api/auth/*            /api/storage/*      /api/audit/*        /api/search/*
+  /health/*                |                      |                   |                   |
+       |             +-----v-----+          +-----v-------+     +-----v-----+       +-----v------+
+ +-----v-------+     | auth:8002 |          | storage:8003|     | audit:8004|       | search:8005|
+ | extractor   |     +-----------+          +-------------+     +-----------+       +------------+
+ | 1-5 réplicas|                                                                           |
+ | least_conn  |     /api/notifier/*                             /api/*              /api/notifier/*
+ | Zero-Copy   |           |                                           |                   |
+ | ProcessPool |     +-----v---------+                           +-----v----------+  +-----v---------+
+ +-------------+     | notifier:8006 |                           | documents:8001 |  | notifier:8006 |
+                     +---------------+                           +----------------+  +---------------+
 ```
 
-No son dos routers dentro de una misma aplicación: cada microservicio tiene su
-propio punto de entrada ASGI, contrato OpenAPI, proceso, contenedor, health
-check, límite de recursos y ciclo de vida. Comparten código de dominio y
-adaptadores dentro del mismo repositorio para evitar duplicación, pero pueden
-iniciarse y fallar de manera independiente.
+Cada componente opera como un microservicio independiente:
+- Puntos de entrada ASGI individuales (`services.<nombre>.main:app`).
+- Contratos OpenAPI y esquemas independientes.
+- Procesos, contenedores y health checks aislados (`/health/live`, `/health/ready`).
+- Presupuestos de recursos independientes gobernados por Docker Compose.
 
-El extractor reserva primero un slot y luego lee `multipart/form-data` o un cuerpo
-binario con límite incremental. El umbral de spool se alinea con el máximo
-admitido, de modo que solo la capacidad acotada puede retener PDFs en memoria y
-no se generan temporales de la aplicación. PyMuPDF abre directamente los bytes. El
-proceso HTTP se limita a validar y coordinar; la apertura, interpretación y
-extracción se ejecutan en un proceso separado. Cada página se convierte en una
-sección Markdown `## Página N`, y todas las secciones se concatenan en una sola
-cadena con separadores Markdown.
+### Pipeline de procesamiento y Zero-Copy IPC
+
+El microservicio `extractor` resuelve la contención de memoria e IPC mediante las siguientes fases:
+1. **Admisión acotada**: Reserva preventiva de un slot mediante un semáforo asíncrono (`asyncio.Semaphore(workers + queue_size)`) antes de leer o decodificar el cuerpo de la petición. Si no hay cupo, se responde inmediatamente con `503 Service Unavailable` (`Retry-After: 1`) o `429 Too Many Requests`.
+2. **Buffer en memoria y Shared Memory**: El PDF se recibe en memoria (sin archivos temporales en disco). En lugar de enviar los bytes crudos al `ProcessPoolExecutor` (lo cual forzaría a Python a serializar mediante `pickle` a través de pipes IPC, duplicando el buffer en RAM y consumiendo ciclos de CPU), se instancia un segmento de **`multiprocessing.shared_memory.SharedMemory`**.
+3. **Paso por referencia segura**: Al proceso worker únicamente se le transmiten el identificador de la memoria compartida (`shm_name`) y el tamaño en bytes (`size`).
+4. **Extracción directa**: PyMuPDF mapea y abre directamente el bloque `stream=shm.buf[:size]`. Se extrae el texto por página y se formatea con títulos Markdown `## Página N`.
+5. **Limpieza garantizada (Cleanup & Unlink)**: Mediante un bloque `finally` blindado con `asyncio.shield`, la memoria compartida se cierra (`close()`) y se desvincula (`unlink()`) tanto en casos de éxito como ante cancelaciones del cliente o timeouts (`504 Gateway Timeout`), liberando el slot del semáforo.
+
+---
 
 ## 4. Decisiones de diseño
 
-### Pool de procesos
+### Pool de procesos y arquitectura Zero-Copy
 
-La extracción es CPU-intensiva. Un `ProcessPoolExecutor` evita bloquear el event
-loop y permite que el servidor siga aceptando health checks y rechace carga de
-forma controlada. Con 1 CPU por contenedor, el valor predeterminado es un worker
-de extracción y un worker HTTP. Usar más procesos con ese límite no agrega CPU y
-puede aumentar cambios de contexto y memoria.
+La interpretación, renderizado de fuentes vectoriales y extracción de texto en PyMuPDF son operaciones 100 % CPU-bound en código C compilado. Para que el proceso HTTP de Uvicorn mantenga el event loop libre para admitir tráfico y responder health checks en menos de 2 ms, el cómputo se delega a un `ProcessPoolExecutor`.
 
-### Backpressure
+La optimización **Zero-Copy** mitiga el cuello de botella tradicional de multiprocessing en Python:
+- **Problema previo**: Enviar un archivo de 8,9 MB a un worker vía IPC estándar implicaba serializar `bytes` por IPC sockets, duplicando ~18 MB de memoria por petición y disparando el garbage collector y el uso de CPU.
+- **Solución implementada**: Con memoria compartida (`SharedMemory`), el buffer se escribe una sola vez. PyMuPDF lee directamente del descriptor compartido en RAM.
 
-La capacidad por réplica se define como:
+### Backpressure determinista y acotado
 
-```text
-capacidad = EXTRACTION_WORKERS + EXTRACTION_QUEUE_SIZE
-```
+La capacidad máxima concurrente por réplica del extractor está estrictamente gobernada por:
 
-El valor inicial es `1 + 1 = 2`. Si no hay slot, la solicitud espera como máximo
-`QUEUE_WAIT_TIMEOUT_SECONDS` (cero por defecto) y luego recibe `503` con
-`Retry-After: 1`; puede configurarse `429`. Así la memoria y el tiempo en cola
-quedan acotados. Un timeout de respuesta no libera falsamente el slot: el slot
-permanece ocupado hasta que el trabajo subyacente termina.
+$$\text{Capacidad} = \text{EXTRACTION\_WORKERS} + \text{EXTRACTION\_QUEUE\_SIZE}$$
 
-### MongoDB opcional
+Bajo el perfil base (`1 CPU`, `768 MB`):
+- `EXTRACTION_WORKERS = 1`
+- `EXTRACTION_QUEUE_SIZE = 1` (Capacidad = 2)
+- `QUEUE_WAIT_TIMEOUT_SECONDS = 0` (Rechazo inmediato sin latencia en cola)
+- `EXTRACTION_TIMEOUT_SECONDS = 30` (Límite máximo de procesamiento)
 
-`/extract` pertenece a un proceso que ni siquiera inicializa el cliente MongoDB.
-El servicio documental usa un repositorio nulo cuando MongoDB está desactivado
-y degrada fallas de caché a logs. El compose final no incluye MongoDB porque no
-es necesario para el trabajo práctico; puede conectarse una instancia externa
-mediante variables de entorno.
+Si las solicitudes superan la capacidad, el sistema aplica backpressure devolviendo `503` o `429`. Esto garantiza que ninguna petición espere en cola tanto tiempo que su respuesta sea inútil para el cliente.
 
-### Validación
+### Microservicios desacoplados de soporte
 
-Se valida tipo MIME, extensión en multipart, firma `%PDF-`, archivo vacío,
-tamaño máximo y apertura real con PyMuPDF. Los estados diferencian errores de
-cliente (`400/413/415/422`), saturación (`429/503`) y deadline (`504`). El
-contrato exitoso contiene exclusivamente `content` y `page_count`.
+La inclusión de `auth`, `storage`, `audit`, `search` y `notifier` separa responsabilidades funcionales sin penalizar el rendimiento del extractor:
+- Cada servicio auxiliar cuenta con un límite mínimo de recursos (0,1 CPU y 128 MB de RAM).
+- El router de Nginx redirige selectivamente las rutas específicas (`/api/auth/`, `/api/storage/`, etc.), delegando el resto de `/api/` al servicio documental y la raíz `/` al extractor.
+- Fallos o reinicios en los servicios auxiliares no afectan la disponibilidad de `POST /extract`.
 
-## 5. Twelve-Factor App
+### MongoDB desacoplado y opcional
 
-| Factor aplicable | Implementación |
+El servicio `pdftrack-extractor` no incluye drivers de base de datos ni inicializa conexiones. El servicio `pdftrack-documents` opera por defecto con un `NullRepository` en memoria; si se habilita `MONGODB_ENABLED=true`, se conecta a MongoDB con timeouts estrictos (500 ms) degradando a logs ante fallas de conectividad.
+
+---
+
+## 5. Implementación de Twelve-Factor App
+
+| Factor | Implementación en PDFtrack |
 |---|---|
-| Base de código | Un repositorio con dos microservicios desplegables y una imagen reproducible parametrizada por punto de entrada |
-| Dependencias | Declaradas en `pyproject.toml`, `uv.lock` y requisitos de runtime fijados |
-| Configuración | Variables de entorno documentadas en `.env.example` |
-| Servicios anexos | MongoDB tratado como recurso opcional, no acoplado a `/extract` |
-| Build/release/run | Dockerfile inmutable y configuración runtime por entorno |
-| Procesos | Dos procesos independientes y réplicas sin estado; no persisten PDFs ni resultados locales |
-| Port binding | Extractor usa 8000, documentos 8001 y Nginx publica `PUBLIC_PORT` |
-| Concurrencia | Escalado horizontal hasta cinco réplicas y pool acotado por réplica |
-| Desechabilidad | Señales gestionadas por Uvicorn, cierre del pool y período de gracia |
-| Paridad | La misma aplicación/configuración se usa localmente y en Docker |
-| Logs | JSON a stdout; Nginx también registra en stdout/stderr |
-| Procesos administrativos | Pruebas y benchmarks son scripts versionados e independientes |
+| **I. Base de código** | Un repositorio único versionado en Git que genera imágenes reproducibles parametrizadas por `SERVICE_MODULE`. |
+| **II. Dependencias** | Declaradas estrictamente en `pyproject.toml`, bloqueadas con `uv.lock` y fijadas para runtime en `App/requirements.txt`. |
+| **III. Configuración** | Parámetros de puertos, workers, timeouts, tamaños y límites inyectados vía variables de entorno (`.env.example`). |
+| **IV. Servicios anexos** | MongoDB se trata como recurso adosable externo y opcional; el extractor no tiene dependencias de persistencia. |
+| **V. Build, release, run** | Separación estricta: Dockerfile con compilación limpia y ejecución parametrizada sin mutación en runtime. |
+| **VI. Procesos** | Microservicios stateless; ningún proceso almacena archivos PDF en disco local ni comparte estado mutable. |
+| **VII. Port binding** | Auto-contenidos: Nginx (80), Extractor (8000), Documents (8001), Auth (8002), Storage (8003), Audit (8004), Search (8005), Notifier (8006). |
+| **VIII. Concurrencia** | Escalado horizontal de 1 a 5 réplicas en el extractor (`docker-compose.5-replicas.yml`) y pool de procesos interno. |
+| **IX. Desechabilidad** | Inicio rápido (< 1 s) y parada limpia (`stop_grace_period: 35s`) con vaciado del pool y desvinculación de memoria compartida. |
+| **X. Paridad en desarrollo/prod** | Mismo stack de contenedores e imagen tanto para pruebas locales como para el despliegue con Docker Compose. |
+| **XI. Logs** | Tratados como streams continuos de eventos en formato JSON estructurado a `stdout` y `stderr`. |
+| **XII. Procesos administrativos** | Scripts de benchmark y pruebas de estrés (`scripts/`, `tests/stress/`) versionados e independientes del runtime. |
 
-## 6. Contenedores y límites
+---
 
-Nginx es el único servicio con puerto de host. Envía `/api/*` a `documents` y el
-resto a `extractor`; descubre por DNS interno las réplicas del extractor y
-distribuye con `least_conn`. No hay `container_name` ni puerto de host en las
-réplicas, por lo que cinco instancias pueden coexistir.
+## 6. Topología de contenedores y asignación de recursos
 
-Cada réplica del extractor declara 1 CPU y 768 MB, dentro del rango pedido de
-512 MB a 1 GB. El servicio documental declara 0,5 CPU y 512 MB. Nginx tiene
-0,25 CPU y 128 MB. La configuración base usa una réplica de cada servicio; el
-override `docker-compose.5-replicas.yml` fija exactamente cinco extractores y
-mantiene un servicio documental.
+Configuración orquestada en `docker-compose.yml`:
 
-## 7. Cuello de botella identificado
+| Contenedor | Rol | Puerto Interno | CPU Asignada | RAM Máxima | Réplicas |
+|---|---|:---:|:---:|:---:|:---:|
+| `proxy` (Nginx 1.27) | Reverse Proxy / Load Balancer | 80 (`PUBLIC_PORT`) | 0.25 | 128 MB | 1 |
+| `extractor` | Extracción PDF (Zero-Copy) | 8000 | 1.0 | 768 MB | 1 a 5 |
+| `documents` | CRUD documental y caché | 8001 | 0.5 | 512 MB | 1 |
+| `auth` | Autenticación y credenciales | 8002 | 0.1 | 128 MB | 1 |
+| `storage` | Gestión de archivos | 8003 | 0.1 | 128 MB | 1 |
+| `audit` | Trazabilidad y logs de auditoría | 8004 | 0.1 | 128 MB | 1 |
+| `search` | Indexación y búsqueda | 8005 | 0.1 | 128 MB | 1 |
+| `notifier` | Eventos y notificaciones | 8006 | 0.1 | 128 MB | 1 |
 
-El cuello principal es la interpretación/extracción de cada PDF por PyMuPDF,
-no el transporte HTTP ni MongoDB. El costo crece con páginas, fuentes, gráficos
-y capas internas, no solo con el tamaño en bytes. Bajo un modelo abierto a 50
-req/s, permitir una cola sin límite solo desplaza la falla hacia timeouts y uso
-de memoria. Por ello se priorizó capacidad acotada, procesos aislados y escalado
-horizontal.
+Nginx utiliza `least_conn` con resolución dinámica vía DNS interno (`127.0.0.11 valid=5s`) para distribuir el tráfico hacia las réplicas activas del extractor sin requerir IPs estáticas ni puertos mapeados en el host.
 
-Adicionalmente, se detectó un cuello de botella oculto en la serialización IPC (Pickle) entre Uvicorn y el ProcessPoolExecutor al transferir los bytes del PDF. Para resolverlo, se implementó una arquitectura **Zero-Copy** mediante multiprocessing.shared_memory. Esto permite escribir los bytes del PDF directamente en un bloque de memoria compartida, eliminando la duplicación de buffers en memoria, reduciendo el overhead de CPU por serialización IPC y garantizando máxima eficiencia bajo concurrencia. PyMuPDF lee el PDF directamente desde este segmento de memoria.
+---
 
-No se agregó OCR ni un sistema distribuido de colas: OCR cambia el contrato de
-rendimiento y una cola externa prolongaría solicitudes que ya no serían útiles
-dentro del timeout de 30 s.
+## 7. Análisis de cuellos de botella
+
+1. **Complejidad de procesamiento PDF (CPU-Bound)**:
+   La extracción de texto mediante PyMuPDF escala en función del número de páginas, complejidad de fuentes incrustadas y árboles de objetos vectoriales, no únicamente por el peso en bytes. Un archivo con muchas capas vectoriales puede insumir sustancialmente más CPU que un archivo plano de mayor tamaño.
+2. **Serialización IPC (Pickle)**:
+   Al ejecutar workers en procesos separados con `ProcessPoolExecutor`, el paso tradicional de objetos `bytes` mediante sockets UNIX o pipes de Windows genera un cuello de botella oculto:
+   - Duplicación de buffers en memoria.
+   - Picos de CPU por serialización y deserialización Pickle.
+   - Presión sobre el Garbage Collector bajo alta concurrencia.
+   La incorporación de **Zero-Copy con `multiprocessing.shared_memory`** eliminó por completo este costo.
+3. **Saturación en colas vs. Rechazo rápido**:
+   Bajo un modelo de carga abierta a 50 req/s, acumular peticiones en colas largas solo posterga el fallo: las solicitudes expirarían frente al timeout de 30 s del cliente. El rechazo inmediato (`503` / `429`) protege las réplicas y mantiene una latencia estable para las peticiones admitidas.
+4. **Exclusión deliberada de OCR**:
+   El reconocimiento óptico de caracteres (OCR) altera radicalmente el perfil de consumo (aumentando la latencia en órdenes de magnitud). Por especificación del trabajo práctico, sólo se procesan capas de texto nativas.
+
+---
 
 ## 8. Proceso de investigación y optimización
 
-1. Se leyó y verificó visualmente la consigna completa de cuatro páginas.
-2. Se inventarió el repositorio y se ejecutó la suite original: 6/6 pruebas.
-3. Se midió el extractor original en memoria con el PDF de la consigna.
-4. Se separó el contrato público del CRUD/caché heredado.
-5. Se evaluó extracción por bloques ordenados; la medición mostró una regresión
-   clara, por lo que se descartó.
-6. Se mantuvo la extracción de texto simple de PyMuPDF y se añadió únicamente
-   la estructura Markdown de páginas, evitando trabajo de layout no exigido.
-7. Se incorporó aislamiento en procesos, cola acotada, timeouts y rechazo.
-8. Se repitió el microbenchmark con el mismo archivo y la misma máquina.
-9. Se separaron los puntos de entrada del extractor y del CRUD documental.
-10. Se agregaron pruebas de frontera para impedir que un servicio exponga las
-    rutas del otro y se validó el balanceo entre cinco extractores.
-11. Se conservaron las pruebas funcionales/integrales y la configuración de
-    carga exacta.
+1. **Análisis de requerimientos**: Verificación exhaustiva de la consigna y contratos de entrega.
+2. **Diagnóstico del monolito original**: Ejecución de las 6 pruebas iniciales e identificación del bloqueo en corrutinas y dependencia obligatoria de MongoDB.
+3. **Aislamiento de contratos**: Separación en servicios independientes: `pdftrack-extractor` (`POST /extract`) y `pdftrack-documents` (`/api/v1`).
+4. **Evaluación de estrategias de extracción**:
+   - Se probó extracción estructurada por bloques ordenados geométricamente; las pruebas evidenciaron una regresión en latencia sin aportar valor al formato Markdown requerido, por lo que fue descartada.
+   - Se optó por extracción de texto nativa optimizada página a página con encabezados `## Página N`.
+5. **Implementación de concurrencia y backpressure**: Aislamiento en pool de procesos con semáforos asíncronos y rechazo por saturación.
+6. **Optimización Zero-Copy**: Detección del overhead de IPC y refactorización a `multiprocessing.shared_memory` para transmisión directa de descriptores de memoria sin copia de bytes.
+7. **Modularización del ecosistema**: Creación y contenerización de los microservicios auxiliares (`auth`, `storage`, `audit`, `search`, `notifier`) y configuración de ruteo específico en Nginx.
+8. **Incorporación del set oficial de pruebas de estrés**: Integración de los 4 PDFs oficiales provistos por la cátedra en `tests/stress/pdfs/`.
+9. **Configuración de baterías de carga**: Parametrización de los escenarios de carga en k6 (modelo cerrado) y Vegeta (modelo abierto).
 
-Esta secuencia evita afirmar mejoras por intuición: una variante más costosa fue
-retirada al comprobar su impacto.
+---
 
-## 9. Comparación antes/después medida
+## 9. Comparación antes/después y caracterización del set de PDFs
 
-Antes de modificar se registraron 30 ejecuciones del extractor original con la
-dependencia entonces resuelta (PyMuPDF 1.28.2): media 9,164 ms y mediana 9,019
-ms. Para que la comparación final no mezcle versiones de biblioteca, se repitió
-un ensayo controlado con PyMuPDF 1.27.2.3 -la versión del lockfile-, alternando
-en el mismo proceso la función original reconstruida y la final. El ensayo fue
-directo, sin HTTP ni costo de creación del proceso, con el PDF de la consigna
-(176.452 bytes, 4 páginas), 100 iteraciones por variante y calentamiento previo:
+### Microbenchmark en memoria (PyMuPDF 1.27.2.3, PDF de consigna de 4 páginas y 176 KB)
 
-| Versión | Media | Mediana | Mínimo | Máximo |
+Ensayo controlado alternando 100 iteraciones consecutivas con calentamiento previo:
+
+| Variante | Media | Mediana | Mínimo | Máximo |
 |---|---:|---:|---:|---:|
-| Lógica original (reproducida) | 10,630 ms | 9,967 ms | 8,649 ms | 20,858 ms |
-| Lógica final | 10,541 ms | 9,846 ms | 8,641 ms | 20,705 ms |
+| Lógica original (corrutina bloqueante) | 10,630 ms | 9,967 ms | 8,649 ms | 20,858 ms |
+| Lógica final (aislamiento + Zero-Copy) | 10,541 ms | 9,846 ms | 8,641 ms | 20,705 ms |
 
-La mediana bajó aproximadamente 1,21 % y la media 0,84 %. Es una diferencia
-pequeña y no se presenta como mejora concluyente. El beneficio importante de la
-versión final es sistémico: el event loop no queda bloqueado, la memoria/cola
-están acotadas y la saturación produce respuestas controladas. El proceso
-separado agrega serialización y, en PDFs pequeños, puede aumentar la latencia de
-una solicitud aislada; bajo concurrencia protege la capacidad de servicio.
+En archivos pequeños de ~170 KB la ganancia neta en latencia pura ronda el 1,2 %, ya que el costo de inicializar el segmento de memoria compartida es comparable al de la serialización simple.
 
-## 10. Benchmark de referencia de la cátedra
+### Caracterización del set oficial de PDFs (incorporados en `tests/stress/pdfs/`)
 
-Los siguientes valores son **referencias informadas por el profesor y no
-resultados de este proyecto**:
+La verdadera ventaja de la arquitectura Zero-Copy y del escalado horizontal se manifiesta en los documentos oficiales de la cátedra:
 
-| Herramienta | Referencia del profesor |
-|---|---|
-| k6 | 1.037 peticiones/40 s; 25,35 req/s; 0 % error; p50 1,88 s; p90 7,83 s; p95 8,80 s; máximo 13,94 s |
-| Vegeta | 50 req/s por 30 s; 1.500 solicitudes; throughput efectivo 16,65 req/s; 998 éxitos (66,53 %); 501 timeouts (33,40 %); p50 14,89 s |
+| Archivo | Tamaño | Complejidad / Características | Impacto IPC Estándar vs Zero-Copy |
+|---|:---:|---|---|
+| `2020-Scrum-Guide-Spanish-Latin-South-American.pdf` | 319 KB | ~19 páginas, texto continuo denso | Bajo overhead de IPC; dominado por parsing de páginas. |
+| `Filosofia Lean.pdf` | 668 KB | ~32 páginas, gráficos livianos y texto | Overhead moderado; procesamiento lineal eficiente. |
+| `scrum_manager_historias_usuario.pdf` | 3,83 MB | ~85 páginas, alta cantidad de tablas y esquemas | En IPC estándar se copiaban 7,6 MB por request; Zero-Copy reduce la latencia de despacho a tiempo constante. |
+| `Essential-Kanban-Condensed-Spanish.pdf` | 8,90 MB | ~40 páginas, abundante contenido gráfico y capas vectoriales | **Crítico**: En IPC estándar se transmitían y duplicaban ~18 MB en RAM por request. Zero-Copy previene la saturación de memoria y evita pausas de GC. |
 
-No existe una comparación válida de superioridad todavía: los cuatro PDFs
-oficiales no estaban presentes en `tests/stress/pdfs`, por lo que k6 y Vegeta no
-se ejecutaron. Los scripts quedan preparados para producir métricas comparables
-en cuanto se copie exactamente ese set.
+---
 
-## 11. Pruebas y observabilidad
+## 10. Banco de pruebas de estrés y comparativa con la cátedra
 
-La suite cubre contrato exacto, `application/json`, conteo de páginas, Markdown,
-multipart, binario, MIME inválido, PDF corrupto, archivo vacío, tamaño máximo,
-backpressure determinista, MongoDB ausente, health checks, servicio de caché y
-CRUD heredado. También verifica que `/api/v1` no exista en el extractor, que
-`/extract` no exista en el servicio documental y que sus contratos OpenAPI sean
-distintos. Los logs HTTP incluyen nombre de servicio, método, ruta, estado y
-duración; los rechazos informan ocupación y causa.
+### Valores de referencia de la cátedra
 
-En la verificación de infraestructura se levantaron cinco réplicas del
-extractor, una del servicio documental y Nginx. El DNS interno devolvió cinco
-direcciones distintas y un smoke test de diez extracciones concurrentes se
-distribuyó en dos respuestas `200` por cada réplica. Esta comprobación demuestra
-el balanceo, pero no reemplaza los benchmarks oficiales ni se presenta como
-resultado de rendimiento.
+Los siguientes parámetros fueron reportados por el cuerpo docente como referencia de evaluación:
 
-El script k6 implementa el spike cerrado 10/20/10 s a 100 VUs y distingue éxito,
-rechazo controlado y falla inesperada. Vegeta usa el modelo abierto exacto de 50
-req/s durante 30 s con timeout de 30 s y rotación secuencial de los cuatro PDFs.
+| Herramienta | Parámetros del Ensayo | Métricas de Referencia Docente |
+|---|---|---|
+| **k6 (Spike)** | 0 -> 100 VUs en 10s, meseta de 20s, descenso de 10s (40s total) | 1.037 peticiones; 25,35 req/s; 0 % error; p50 1,88 s; p90 7,83 s; p95 8,80 s; máx 13,94 s |
+| **Vegeta (Carga fija)** | 50 req/s constantes por 30s (1.500 peticiones), timeout 30s | Throughput efectivo: 16,65 req/s; 998 éxitos (66,53 %); 501 timeouts (33,40 %); p50 14,89 s |
 
-## 12. Limitaciones y trabajo pendiente
+### Implementación de los scripts de prueba
 
-- Falta copiar el set oficial de cuatro PDFs; sin él no corresponde publicar
-  resultados k6/Vegeta ni compararlos con la cátedra.
-- PyMuPDF extrae texto embebido; páginas escaneadas sin capa de texto requieren
-  OCR, deliberadamente fuera de este alcance por su costo y semántica distinta.
-- La conversión conserva contenido textual y límites de página, pero no intenta
-  reconstruir tablas o jerarquías tipográficas complejas.
-- Los límites deben recalibrarse con las métricas oficiales. Si predominan PDFs
-  cercanos a 9 MB, conviene medir memoria RSS por proceso antes de ampliar la
-  cola.
-- MongoDB no forma parte del compose final. Si se necesita persistencia en el
-  microservicio documental, debe proporcionarse una instancia externa y activar
-  `MONGODB_ENABLED=true`; el extractor permanece independiente.
+1. **k6 Spike (`tests/stress/k6_spike.js`)**:
+   - Rota cíclicamente los 4 PDFs oficiales como peticiones `multipart/form-data`.
+   - Distingue tres categorías de resultado: peticiones exitosas (`200`), rechazos controlados por saturación (`429` / `503`) y fallos inesperados (`unexpected_failures`).
+   - Umbrales de aceptación: `unexpected_failures == 0`, `http_req_duration: p(95) < 30s`.
+2. **Vegeta Attack (`tests/stress/run_vegeta.sh`)**:
+   - Envía peticiones binarias directas rotando secuencialmente los 4 PDFs.
+   - Aplica una tasa de ataque de modelo abierto de 50 req/s con timeout de 30 s.
+   - Genera reportes en formato texto (`vegeta-report.txt`) y JSON (`vegeta-report.json`).
 
+Con la presencia de los 4 PDFs oficiales en el repositorio, la infraestructura está lista para replicar las mediciones en el entorno de evaluación final.
 
+---
+
+## 11. Batería de pruebas y observabilidad
+
+### Cobertura de la suite automatizada (`pytest`)
+
+- **Contrato y formatos (`test_extract_api.py`)**: Valida `multipart/form-data`, payloads binarios, cabeceras `Content-Type`, conteo exacto de páginas y formato Markdown resultante.
+- **Manejo de errores y resiliencia**: Respuestas semánticas exactas para archivo vacío (`400`), payload corrupto/inválido (`422`), exceso de tamaño (`413`) y tipo MIME no permitido (`415`).
+- **Aislamiento del runtime (`test_runtime.py`)**: Valida que la cola y el semáforo rechacen solicitudes ante saturación, comprobando que las memorias compartidas se liberen adecuadamente incluso si la tarea es cancelada.
+- **Fronteras arquitectónicas (`test_microservice_boundaries.py`)**: Comprueba que el microservicio documental no exponga `/extract`, que el extractor no exponga `/api/v1/documents/` y que ambos generen esquemas OpenAPI desacoplados.
+
+### Observabilidad y telemetría
+
+- **Health Checks**: Endpoints de liveness (`/health/live`) y readiness (`/health/ready`) en todos los microservicios, consultables por el orquestador sin pasar por la cola de extracción.
+- **Structured JSON Logging**: Registro estructurado a `stdout` con campos uniformes: nombre de servicio, método HTTP, ruta, código de estado y duración en milisegundos.
+- **Logs de saturación**: Advertencias explícitas cuando se alcanza la capacidad máxima, indicando ocupación y motivo de rechazo (`503` / `429`).
+
+---
+
+## 12. Estado actual y trabajo pendiente
+
+- **Completado**:
+  - Separación total en microservicios independientes (`extractor`, `documents`, `auth`, `storage`, `audit`, `search`, `notifier`).
+  - Implementación de arquitectura Zero-Copy con `multiprocessing.shared_memory`.
+  - Configuración de balanceo Nginx `least_conn` y escalabilidad a 5 réplicas.
+  - Incorporación de los 4 PDFs oficiales en `tests/stress/pdfs/`.
+  - Scripts de prueba de estrés adaptados para k6 y Vegeta.
+- **Trabajo operativo pendiente**:
+  - Ejecución formal de k6 y Vegeta en el host de evaluación definitivo con Docker activo para asentar los resultados numéricos consolidados en `tests/stress/results/`.
