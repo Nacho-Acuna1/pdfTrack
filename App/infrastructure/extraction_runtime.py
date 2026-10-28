@@ -70,6 +70,9 @@ class ExtractionRuntime:
             self._release_slot()
             try:
                 shm.close()
+            except Exception:
+                pass
+            try:
                 shm.unlink()
             except Exception:
                 pass

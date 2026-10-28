@@ -94,6 +94,7 @@ services:
       SERVICE_MODULE: services.auth.main:app
       HOST: 0.0.0.0
       PORT: 8002
+      HTTP_WORKERS: 1
     expose:
       - "8002"
     restart: unless-stopped
@@ -114,6 +115,7 @@ services:
       SERVICE_MODULE: services.storage.main:app
       HOST: 0.0.0.0
       PORT: 8003
+      HTTP_WORKERS: 1
     expose:
       - "8003"
     restart: unless-stopped
@@ -134,6 +136,7 @@ services:
       SERVICE_MODULE: services.audit.main:app
       HOST: 0.0.0.0
       PORT: 8004
+      HTTP_WORKERS: 1
     expose:
       - "8004"
     restart: unless-stopped
@@ -154,6 +157,7 @@ services:
       SERVICE_MODULE: services.search.main:app
       HOST: 0.0.0.0
       PORT: 8005
+      HTTP_WORKERS: 1
     expose:
       - "8005"
     restart: unless-stopped
@@ -174,6 +178,7 @@ services:
       SERVICE_MODULE: services.notifier.main:app
       HOST: 0.0.0.0
       PORT: 8006
+      HTTP_WORKERS: 1
     expose:
       - "8006"
     restart: unless-stopped

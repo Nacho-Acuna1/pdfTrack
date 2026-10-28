@@ -143,7 +143,7 @@ pyvenv.cfg
 migrations/
 
 # Local benchmark outputs and official input PDFs (distributed separately)
-tests/stress/results/
+tests/stress/results/*.bin
 tests/stress/pdfs/*.pdf
 
 

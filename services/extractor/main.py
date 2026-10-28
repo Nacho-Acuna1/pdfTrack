@@ -1,8 +1,11 @@
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.formparsers import MultiPartParser
 
 from App.api.routers import health_router, public_extract_router
@@ -12,6 +15,8 @@ from App.infrastructure.extraction_runtime import ExtractionRuntime
 
 
 SERVICE_NAME = "pdftrack-extractor"
+STATIC_DIR = Path(__file__).resolve().parents[2] / "App" / "static"
+STATIC_INDEX = STATIC_DIR / "index.html"
 
 configure_logging(settings.LOG_LEVEL)
 logger = logging.getLogger(__name__)
@@ -52,6 +57,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
 app.include_router(public_extract_router.router)
 app.include_router(health_router.router)
 
@@ -73,8 +81,20 @@ async def log_requests(request: Request, call_next):
     return response
 
 
-@app.get("/")
+@app.get("/", tags=["Frontend"])
 async def root():
+    if STATIC_INDEX.exists():
+        return FileResponse(STATIC_INDEX, media_type="text/html")
+    return {
+        "service": SERVICE_NAME,
+        "status": "running",
+        "extract_endpoint": "/extract",
+        "docs": "/docs",
+    }
+
+
+@app.get("/status", tags=["System"])
+async def status():
     return {
         "service": SERVICE_NAME,
         "status": "running",

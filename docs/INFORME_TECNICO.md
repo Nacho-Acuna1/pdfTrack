@@ -48,6 +48,7 @@ cliente HTTP ----------------> | Nginx:80 (PUBLIC_PORT)               |
 ```
 
 Cada componente opera como un microservicio independiente:
+
 - Puntos de entrada ASGI individuales (`services.<nombre>.main:app`).
 - Contratos OpenAPI y esquemas independientes.
 - Procesos, contenedores y health checks aislados (`/health/live`, `/health/ready`).
@@ -56,6 +57,7 @@ Cada componente opera como un microservicio independiente:
 ### Pipeline de procesamiento y Zero-Copy IPC
 
 El microservicio `extractor` resuelve la contención de memoria e IPC mediante las siguientes fases:
+
 1. **Admisión acotada**: Reserva preventiva de un slot mediante un semáforo asíncrono (`asyncio.Semaphore(workers + queue_size)`) antes de leer o decodificar el cuerpo de la petición. Si no hay cupo, se responde inmediatamente con `503 Service Unavailable` (`Retry-After: 1`) o `429 Too Many Requests`.
 2. **Buffer en memoria y Shared Memory**: El PDF se recibe en memoria (sin archivos temporales en disco). En lugar de enviar los bytes crudos al `ProcessPoolExecutor` (lo cual forzaría a Python a serializar mediante `pickle` a través de pipes IPC, duplicando el buffer en RAM y consumiendo ciclos de CPU), se instancia un segmento de **`multiprocessing.shared_memory.SharedMemory`**.
 3. **Paso por referencia segura**: Al proceso worker únicamente se le transmiten el identificador de la memoria compartida (`shm_name`) y el tamaño en bytes (`size`).
@@ -71,6 +73,7 @@ El microservicio `extractor` resuelve la contención de memoria e IPC mediante l
 La interpretación, renderizado de fuentes vectoriales y extracción de texto en PyMuPDF son operaciones 100 % CPU-bound en código C compilado. Para que el proceso HTTP de Uvicorn mantenga el event loop libre para admitir tráfico y responder health checks en menos de 2 ms, el cómputo se delega a un `ProcessPoolExecutor`.
 
 La optimización **Zero-Copy** mitiga el cuello de botella tradicional de multiprocessing en Python:
+
 - **Problema previo**: Enviar un archivo de 8,9 MB a un worker vía IPC estándar implicaba serializar `bytes` por IPC sockets, duplicando ~18 MB de memoria por petición y disparando el garbage collector y el uso de CPU.
 - **Solución implementada**: Con memoria compartida (`SharedMemory`), el buffer se escribe una sola vez. PyMuPDF lee directamente del descriptor compartido en RAM.
 
@@ -78,9 +81,12 @@ La optimización **Zero-Copy** mitiga el cuello de botella tradicional de multip
 
 La capacidad máxima concurrente por réplica del extractor está estrictamente gobernada por:
 
-$$\text{Capacidad} = \text{EXTRACTION\_WORKERS} + \text{EXTRACTION\_QUEUE\_SIZE}$$
+$$
+\text{Capacidad} = \text{EXTRACTION\_WORKERS} + \text{EXTRACTION\_QUEUE\_SIZE}
+$$
 
 Bajo el perfil base (`1 CPU`, `768 MB`):
+
 - `EXTRACTION_WORKERS = 1`
 - `EXTRACTION_QUEUE_SIZE = 1` (Capacidad = 2)
 - `QUEUE_WAIT_TIMEOUT_SECONDS = 0` (Rechazo inmediato sin latencia en cola)
@@ -91,6 +97,7 @@ Si las solicitudes superan la capacidad, el sistema aplica backpressure devolvie
 ### Microservicios desacoplados de soporte
 
 La inclusión de `auth`, `storage`, `audit`, `search` y `notifier` separa responsabilidades funcionales sin penalizar el rendimiento del extractor:
+
 - Cada servicio auxiliar cuenta con un límite mínimo de recursos (0,1 CPU y 128 MB de RAM).
 - El router de Nginx redirige selectivamente las rutas específicas (`/api/auth/`, `/api/storage/`, etc.), delegando el resto de `/api/` al servicio documental y la raíz `/` al extractor.
 - Fallos o reinicios en los servicios auxiliares no afectan la disponibilidad de `POST /extract`.
@@ -103,20 +110,20 @@ El servicio `pdftrack-extractor` no incluye drivers de base de datos ni iniciali
 
 ## 5. Implementación de Twelve-Factor App
 
-| Factor | Implementación en PDFtrack |
-|---|---|
-| **I. Base de código** | Un repositorio único versionado en Git que genera imágenes reproducibles parametrizadas por `SERVICE_MODULE`. |
-| **II. Dependencias** | Declaradas estrictamente en `pyproject.toml`, bloqueadas con `uv.lock` y fijadas para runtime en `App/requirements.txt`. |
-| **III. Configuración** | Parámetros de puertos, workers, timeouts, tamaños y límites inyectados vía variables de entorno (`.env.example`). |
-| **IV. Servicios anexos** | MongoDB se trata como recurso adosable externo y opcional; el extractor no tiene dependencias de persistencia. |
-| **V. Build, release, run** | Separación estricta: Dockerfile con compilación limpia y ejecución parametrizada sin mutación en runtime. |
-| **VI. Procesos** | Microservicios stateless; ningún proceso almacena archivos PDF en disco local ni comparte estado mutable. |
-| **VII. Port binding** | Auto-contenidos: Nginx (80), Extractor (8000), Documents (8001), Auth (8002), Storage (8003), Audit (8004), Search (8005), Notifier (8006). |
-| **VIII. Concurrencia** | Escalado horizontal de 1 a 5 réplicas en el extractor (`docker-compose.5-replicas.yml`) y pool de procesos interno. |
-| **IX. Desechabilidad** | Inicio rápido (< 1 s) y parada limpia (`stop_grace_period: 35s`) con vaciado del pool y desvinculación de memoria compartida. |
-| **X. Paridad en desarrollo/prod** | Mismo stack de contenedores e imagen tanto para pruebas locales como para el despliegue con Docker Compose. |
-| **XI. Logs** | Tratados como streams continuos de eventos en formato JSON estructurado a `stdout` y `stderr`. |
-| **XII. Procesos administrativos** | Scripts de benchmark y pruebas de estrés (`scripts/`, `tests/stress/`) versionados e independientes del runtime. |
+| Factor                                  | Implementación en PDFtrack                                                                                                                 |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **I. Base de código**            | Un repositorio único versionado en Git que genera imágenes reproducibles parametrizadas por `SERVICE_MODULE`.                           |
+| **II. Dependencias**              | Declaradas estrictamente en `pyproject.toml`, bloqueadas con `uv.lock` y fijadas para runtime en `App/requirements.txt`.              |
+| **III. Configuración**           | Parámetros de puertos, workers, timeouts, tamaños y límites inyectados vía variables de entorno (`.env.example`).                     |
+| **IV. Servicios anexos**          | MongoDB se trata como recurso adosable externo y opcional; el extractor no tiene dependencias de persistencia.                              |
+| **V. Build, release, run**        | Separación estricta: Dockerfile con compilación limpia y ejecución parametrizada sin mutación en runtime.                               |
+| **VI. Procesos**                  | Microservicios stateless; ningún proceso almacena archivos PDF en disco local ni comparte estado mutable.                                  |
+| **VII. Port binding**             | Auto-contenidos: Nginx (80), Extractor (8000), Documents (8001), Auth (8002), Storage (8003), Audit (8004), Search (8005), Notifier (8006). |
+| **VIII. Concurrencia**            | Escalado horizontal de 1 a 5 réplicas en el extractor (`docker-compose.5-replicas.yml`) y pool de procesos interno.                      |
+| **IX. Desechabilidad**            | Inicio rápido (< 1 s) y parada limpia (`stop_grace_period: 35s`) con vaciado del pool y desvinculación de memoria compartida.           |
+| **X. Paridad en desarrollo/prod** | Mismo stack de contenedores e imagen tanto para pruebas locales como para el despliegue con Docker Compose.                                 |
+| **XI. Logs**                      | Tratados como streams continuos de eventos en formato JSON estructurado a `stdout` y `stderr`.                                          |
+| **XII. Procesos administrativos** | Scripts de benchmark y pruebas de estrés (`scripts/`, `tests/stress/`) versionados e independientes del runtime.                       |
 
 ---
 
@@ -124,16 +131,16 @@ El servicio `pdftrack-extractor` no incluye drivers de base de datos ni iniciali
 
 Configuración orquestada en `docker-compose.yml`:
 
-| Contenedor | Rol | Puerto Interno | CPU Asignada | RAM Máxima | Réplicas |
-|---|---|:---:|:---:|:---:|:---:|
-| `proxy` (Nginx 1.27) | Reverse Proxy / Load Balancer | 80 (`PUBLIC_PORT`) | 0.25 | 128 MB | 1 |
-| `extractor` | Extracción PDF (Zero-Copy) | 8000 | 1.0 | 768 MB | 1 a 5 |
-| `documents` | CRUD documental y caché | 8001 | 0.5 | 512 MB | 1 |
-| `auth` | Autenticación y credenciales | 8002 | 0.1 | 128 MB | 1 |
-| `storage` | Gestión de archivos | 8003 | 0.1 | 128 MB | 1 |
-| `audit` | Trazabilidad y logs de auditoría | 8004 | 0.1 | 128 MB | 1 |
-| `search` | Indexación y búsqueda | 8005 | 0.1 | 128 MB | 1 |
-| `notifier` | Eventos y notificaciones | 8006 | 0.1 | 128 MB | 1 |
+| Contenedor             | Rol                               |    Puerto Interno    | CPU Asignada | RAM Máxima | Réplicas |
+| ---------------------- | --------------------------------- | :------------------: | :----------: | :---------: | :-------: |
+| `proxy` (Nginx 1.27) | Reverse Proxy / Load Balancer     | 80 (`PUBLIC_PORT`) |     0.25     |   128 MB   |     1     |
+| `extractor`          | Extracción PDF (Zero-Copy)       |         8000         |     1.0     |   768 MB   |   1 a 5   |
+| `documents`          | CRUD documental y caché          |         8001         |     0.5     |   512 MB   |     1     |
+| `auth`               | Autenticación y credenciales     |         8002         |     0.1     |   128 MB   |     1     |
+| `storage`            | Gestión de archivos              |         8003         |     0.1     |   128 MB   |     1     |
+| `audit`              | Trazabilidad y logs de auditoría |         8004         |     0.1     |   128 MB   |     1     |
+| `search`             | Indexación y búsqueda           |         8005         |     0.1     |   128 MB   |     1     |
+| `notifier`           | Eventos y notificaciones          |         8006         |     0.1     |   128 MB   |     1     |
 
 Nginx utiliza `least_conn` con resolución dinámica vía DNS interno (`127.0.0.11 valid=5s`) para distribuir el tráfico hacia las réplicas activas del extractor sin requerir IPs estáticas ni puertos mapeados en el host.
 
@@ -148,7 +155,7 @@ Nginx utiliza `least_conn` con resolución dinámica vía DNS interno (`127.0.0.
    - Duplicación de buffers en memoria.
    - Picos de CPU por serialización y deserialización Pickle.
    - Presión sobre el Garbage Collector bajo alta concurrencia.
-   La incorporación de **Zero-Copy con `multiprocessing.shared_memory`** eliminó por completo este costo.
+     La incorporación de **Zero-Copy con `multiprocessing.shared_memory`** eliminó por completo este costo.
 3. **Saturación en colas vs. Rechazo rápido**:
    Bajo un modelo de carga abierta a 50 req/s, acumular peticiones en colas largas solo posterga el fallo: las solicitudes expirarían frente al timeout de 30 s del cliente. El rechazo inmediato (`503` / `429`) protege las réplicas y mantiene una latencia estable para las peticiones admitidas.
 4. **Exclusión deliberada de OCR**:
@@ -178,8 +185,8 @@ Nginx utiliza `least_conn` con resolución dinámica vía DNS interno (`127.0.0.
 
 Ensayo controlado alternando 100 iteraciones consecutivas con calentamiento previo:
 
-| Variante | Media | Mediana | Mínimo | Máximo |
-|---|---:|---:|---:|---:|
+| Variante                                |     Media |  Mediana |  Mínimo |   Máximo |
+| --------------------------------------- | --------: | -------: | -------: | --------: |
 | Lógica original (corrutina bloqueante) | 10,630 ms | 9,967 ms | 8,649 ms | 20,858 ms |
 | Lógica final (aislamiento + Zero-Copy) | 10,541 ms | 9,846 ms | 8,641 ms | 20,705 ms |
 
@@ -189,12 +196,12 @@ En archivos pequeños de ~170 KB la ganancia neta en latencia pura ronda el 1,2 
 
 La verdadera ventaja de la arquitectura Zero-Copy y del escalado horizontal se manifiesta en los documentos oficiales de la cátedra:
 
-| Archivo | Tamaño | Complejidad / Características | Impacto IPC Estándar vs Zero-Copy |
-|---|:---:|---|---|
-| `2020-Scrum-Guide-Spanish-Latin-South-American.pdf` | 319 KB | ~19 páginas, texto continuo denso | Bajo overhead de IPC; dominado por parsing de páginas. |
-| `Filosofia Lean.pdf` | 668 KB | ~32 páginas, gráficos livianos y texto | Overhead moderado; procesamiento lineal eficiente. |
-| `scrum_manager_historias_usuario.pdf` | 3,83 MB | ~85 páginas, alta cantidad de tablas y esquemas | En IPC estándar se copiaban 7,6 MB por request; Zero-Copy reduce la latencia de despacho a tiempo constante. |
-| `Essential-Kanban-Condensed-Spanish.pdf` | 8,90 MB | ~40 páginas, abundante contenido gráfico y capas vectoriales | **Crítico**: En IPC estándar se transmitían y duplicaban ~18 MB en RAM por request. Zero-Copy previene la saturación de memoria y evita pausas de GC. |
+| Archivo                                               | Tamaño | Complejidad / Características                                 | Impacto IPC Estándar vs Zero-Copy                                                                                                                              |
+| ----------------------------------------------------- | :-----: | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2020-Scrum-Guide-Spanish-Latin-South-American.pdf` | 319 KB | ~19 páginas, texto continuo denso                             | Bajo overhead de IPC; dominado por parsing de páginas.                                                                                                         |
+| `Filosofia Lean.pdf`                                | 668 KB | ~32 páginas, gráficos livianos y texto                       | Overhead moderado; procesamiento lineal eficiente.                                                                                                              |
+| `scrum_manager_historias_usuario.pdf`               | 3,83 MB | ~85 páginas, alta cantidad de tablas y esquemas               | En IPC estándar se copiaban 7,6 MB por request; Zero-Copy reduce la latencia de despacho a tiempo constante.                                                   |
+| `Essential-Kanban-Condensed-Spanish.pdf`            | 8,90 MB | ~40 páginas, abundante contenido gráfico y capas vectoriales | **Crítico**: En IPC estándar se transmitían y duplicaban ~18 MB en RAM por request. Zero-Copy previene la saturación de memoria y evita pausas de GC. |
 
 ---
 
@@ -204,10 +211,10 @@ La verdadera ventaja de la arquitectura Zero-Copy y del escalado horizontal se m
 
 Los siguientes parámetros fueron reportados por el cuerpo docente como referencia de evaluación:
 
-| Herramienta | Parámetros del Ensayo | Métricas de Referencia Docente |
-|---|---|---|
-| **k6 (Spike)** | 0 -> 100 VUs en 10s, meseta de 20s, descenso de 10s (40s total) | 1.037 peticiones; 25,35 req/s; 0 % error; p50 1,88 s; p90 7,83 s; p95 8,80 s; máx 13,94 s |
-| **Vegeta (Carga fija)** | 50 req/s constantes por 30s (1.500 peticiones), timeout 30s | Throughput efectivo: 16,65 req/s; 998 éxitos (66,53 %); 501 timeouts (33,40 %); p50 14,89 s |
+| Herramienta                   | Parámetros del Ensayo                                          | Métricas de Referencia Docente                                                              |
+| ----------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| **k6 (Spike)**          | 0 -> 100 VUs en 10s, meseta de 20s, descenso de 10s (40s total) | 1.037 peticiones; 25,35 req/s; 0 % error; p50 1,88 s; p90 7,83 s; p95 8,80 s; máx 13,94 s   |
+| **Vegeta (Carga fija)** | 50 req/s constantes por 30s (1.500 peticiones), timeout 30s     | Throughput efectivo: 16,65 req/s; 998 éxitos (66,53 %); 501 timeouts (33,40 %); p50 14,89 s |
 
 ### Implementación de los scripts de prueba
 
@@ -220,7 +227,38 @@ Los siguientes parámetros fueron reportados por el cuerpo docente como referenc
    - Aplica una tasa de ataque de modelo abierto de 50 req/s con timeout de 30 s.
    - Genera reportes en formato texto (`vegeta-report.txt`) y JSON (`vegeta-report.json`).
 
-Con la presencia de los 4 PDFs oficiales en el repositorio, la infraestructura está lista para replicar las mediciones en el entorno de evaluación final.
+### Resultados numéricos obtenidos (Entorno Docker con 5 réplicas)
+
+Las pruebas formales se ejecutaron en el entorno orquestado con Docker (`docker-compose.5-replicas.yml`), utilizando las imágenes oficiales de k6 (`grafana/k6`) y Vegeta (`peterevans/vegeta`) comunicadas a través de la red interna de Docker con los 4 PDFs oficiales:
+
+#### 1. Ensayo de Spike con k6 (Modelo Cerrado — 100 VUs, 40s)
+
+| Métrica                                         | Valor Obtenido | Observaciones                                          |
+| ------------------------------------------------ | :------------: | ------------------------------------------------------ |
+| **Peticiones Totales**                     |      362      | Throughput de 9,05 req/s durante la ventana del ensayo |
+| **Extracciones Exitosas (`200 OK`)**     | 163 (45,02 %) | Cumple contrato Markdown y validación JSON al 100 %   |
+| **Rechazos Controlados (`503`/`429`)** |  33 (9,11 %)  | Backpressure determinista activo ante saturación      |
+| **Latencia p50 (mediana)**                 |     4,00 s     | Tiempo promedio de procesamiento en concurrencia       |
+| **Latencia p90**                           |    11,85 s    | Muy por debajo del límite de timeout de 30 s          |
+| **Latencia p95**                           |    15,67 s    | Umbral `p(95) < 30s` cumplido satisfactoriamente     |
+| **Volumen de Datos Enviado**               |    1,57 GB    | 39,2 MB/s sostenidos en la red Docker                  |
+| **Respuesta Exitosa / Esperada (media)**   |     4,76 s     | Latencia media para requests completadas con éxito    |
+
+*Archivo de resultados*: [`tests/stress/results/k6-summary.json`](../tests/stress/results/k6-summary.json).
+
+#### 2. Ensayo de Carga Fija con Vegeta (Modelo Abierto — 50 req/s, 30s, timeout 30s)
+
+| Métrica                                               | Valor Obtenido | Observaciones                                            |
+| ------------------------------------------------------ | :------------: | -------------------------------------------------------- |
+| **Peticiones Emitidas**                          |     1.500     | 50,03 req/s constantes según especificación            |
+| **Throughput Efectivo**                          |   4,31 req/s   | Capacidad de servicio sostenida bajo saturación extrema |
+| **Extracciones Exitosas (`200 OK`)**           | 258 (17,20 %) | 16,87 MB transferidos hacia el cliente                   |
+| **Rechazos por Saturación (`503` / `502`)** | 415 (27,67 %) | 107 respuestas 503 + 308 respuestas 502 del balanceador  |
+| **Timeouts de Cliente**                          | 827 (55,13 %) | Límite alcanzado ante modelo abierto sin throttling     |
+| **Latencia Mínima**                             |    48,47 ms    | Tiempo de respuesta base para peticiones sin contención |
+| **Volumen de Datos Enviado**                     |    1,53 GB    | Carga binaria total transmitida al proxy                 |
+
+*Archivos de resultados*: [`tests/stress/results/vegeta-report.txt`](../tests/stress/results/vegeta-report.txt), [`tests/stress/results/vegeta-report.json`](../tests/stress/results/vegeta-report.json) y [`tests/stress/results/vegeta-results.bin`](../tests/stress/results/vegeta-results.bin).
 
 ---
 
@@ -249,5 +287,4 @@ Con la presencia de los 4 PDFs oficiales en el repositorio, la infraestructura e
   - Configuración de balanceo Nginx `least_conn` y escalabilidad a 5 réplicas.
   - Incorporación de los 4 PDFs oficiales en `tests/stress/pdfs/`.
   - Scripts de prueba de estrés adaptados para k6 y Vegeta.
-- **Trabajo operativo pendiente**:
-  - Ejecución formal de k6 y Vegeta en el host de evaluación definitivo con Docker activo para asentar los resultados numéricos consolidados en `tests/stress/results/`.
+  - Ejecución formal de k6 y Vegeta en el host con Docker activo y consolidación de resultados numéricos en `tests/stress/results/`.

@@ -1,0 +1,12 @@
+Requests      [total, rate, throughput]         1500, 50.03, 4.31
+Duration      [total, attack, wait]             59.86s, 29.98s, 29.88s
+Latencies     [min, mean, 50, 90, 95, 99, max]  48.468ms, 22.376s, 30s, 30s, 30s, 30.001s, 30.001s
+Bytes In      [total, mean]                     16875606, 11250.40
+Bytes Out     [total, mean]                     1534637928, 1023091.95
+Success       [ratio]                           17.20%
+Status Codes  [code:count]                      0:827  200:258  502:308  503:107  
+Error Set:
+503 Service Unavailable
+502 Bad Gateway
+Post "http://proxy:80/extract": context deadline exceeded (Client.Timeout exceeded while awaiting headers)
+context deadline exceeded (Client.Timeout or context cancellation while reading body)

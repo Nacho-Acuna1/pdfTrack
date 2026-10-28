@@ -52,8 +52,8 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_connect_timeout 3s;
-        proxy_read_timeout $;
-        proxy_send_timeout $;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
     }
 
     location /api/storage/ {
@@ -63,8 +63,8 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_connect_timeout 3s;
-        proxy_read_timeout $;
-        proxy_send_timeout $;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
     }
 
     location /api/audit/ {
@@ -74,8 +74,8 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_connect_timeout 3s;
-        proxy_read_timeout $;
-        proxy_send_timeout $;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
     }
 
     location /api/search/ {
@@ -85,8 +85,8 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_connect_timeout 3s;
-        proxy_read_timeout $;
-        proxy_send_timeout $;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
     }
 
     location /api/notifier/ {
@@ -96,8 +96,8 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_connect_timeout 3s;
-        proxy_read_timeout $;
-        proxy_send_timeout $;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
     }
     location /api/ {
         proxy_pass http://pdftrack_documents;

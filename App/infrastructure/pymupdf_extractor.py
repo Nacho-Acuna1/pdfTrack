@@ -19,17 +19,31 @@ def extract_pdf_to_markdown(shm_name: str, size: int) -> tuple[str, int]:
     from multiprocessing.shared_memory import SharedMemory
 
     shm = SharedMemory(name=shm_name)
+    buf_slice = None
     try:
-        with pymupdf.open(stream=shm.buf[:size], filetype="pdf") as document:
+        buf_slice = shm.buf[:size]
+        document = pymupdf.open(stream=buf_slice, filetype="pdf")
+        try:
             page_count = document.page_count
             pages = [
                 _page_markdown(document.load_page(index), index + 1)
                 for index in range(page_count)
             ]
+        finally:
+            document.close()
+            del document
     except Exception as exc:
         raise InvalidPdfError("El archivo no es un PDF válido o está corrupto.") from exc
     finally:
-        shm.close()
+        if buf_slice is not None:
+            try:
+                buf_slice.release()
+            except Exception:
+                pass
+        try:
+            shm.close()
+        except Exception:
+            pass
 
     return "\n\n---\n\n".join(pages), page_count
 

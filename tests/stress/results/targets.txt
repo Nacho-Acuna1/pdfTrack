@@ -1,0 +1,20 @@
+POST http://proxy:80/extract
+Content-Type: application/pdf
+X-Filename: 2020-Scrum-Guide-Spanish-Latin-South-American.pdf
+@/pdfs/2020-Scrum-Guide-Spanish-Latin-South-American.pdf
+
+POST http://proxy:80/extract
+Content-Type: application/pdf
+X-Filename: Essential-Kanban-Condensed-Spanish.pdf
+@/pdfs/Essential-Kanban-Condensed-Spanish.pdf
+
+POST http://proxy:80/extract
+Content-Type: application/pdf
+X-Filename: Filosofia Lean.pdf
+@/pdfs/Filosofia Lean.pdf
+
+POST http://proxy:80/extract
+Content-Type: application/pdf
+X-Filename: scrum_manager_historias_usuario.pdf
+@/pdfs/scrum_manager_historias_usuario.pdf
+
