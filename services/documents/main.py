@@ -85,3 +85,14 @@ async def root() -> dict[str, object]:
         "documents_endpoint": "/api/v1/documents/",
         "docs": "/api/docs",
     }
+
+
+if __name__ == "__main__":
+    import os
+    import uvicorn
+
+    port = int(os.getenv("PORT", "8001"))
+    host = os.getenv("HOST", settings.HOST)
+    workers = int(os.getenv("DOCUMENTS_HTTP_WORKERS", "1"))
+    uvicorn.run("services.documents.main:app", host=host, port=port, workers=workers)
+

@@ -101,3 +101,14 @@ async def status():
         "extract_endpoint": "/extract",
         "docs": "/docs",
     }
+
+
+if __name__ == "__main__":
+    import os
+    import uvicorn
+
+    port = int(os.getenv("PORT", str(settings.PORT)))
+    host = os.getenv("HOST", settings.HOST)
+    workers = int(os.getenv("HTTP_WORKERS", str(settings.HTTP_WORKERS)))
+    uvicorn.run("services.extractor.main:app", host=host, port=port, workers=workers)
+

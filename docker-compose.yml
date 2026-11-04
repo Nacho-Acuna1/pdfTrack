@@ -31,7 +31,6 @@ services:
     environment:
       SERVICE_MODULE: services.extractor.main:app
       HOST: 0.0.0.0
-      PORT: 8000
       HTTP_WORKERS: ${HTTP_WORKERS:-2}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-10}
@@ -67,12 +66,15 @@ services:
       HTTP_WORKERS: ${DOCUMENTS_HTTP_WORKERS:-1}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-10}
-      MONGODB_ENABLED: ${MONGODB_ENABLED:-false}
-      MONGODB_URL: ${MONGODB_URL:-mongodb://host.docker.internal:27017}
+      MONGODB_ENABLED: ${MONGODB_ENABLED:-true}
+      MONGODB_URL: ${MONGODB_URL:-mongodb://mongodb:27017}
       DATABASE_NAME: ${DATABASE_NAME:-pdf_extraction_db}
       MONGODB_TIMEOUT_MS: ${MONGODB_TIMEOUT_MS:-500}
     expose:
       - "8001"
+    depends_on:
+      mongodb:
+        condition: service_healthy
     restart: unless-stopped
     init: true
     stop_grace_period: 10s
@@ -85,108 +87,26 @@ services:
           cpus: "0.5"
           memory: 512M
 
-  auth:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: pdftrack-services:local
-    environment:
-      SERVICE_MODULE: services.auth.main:app
-      HOST: 0.0.0.0
-      PORT: 8002
-      HTTP_WORKERS: 1
-    expose:
-      - "8002"
+  mongodb:
+    image: mongo:7.0
     restart: unless-stopped
-    cpus: 0.1
-    mem_limit: 128m
+    environment:
+      MONGO_INITDB_DATABASE: ${DATABASE_NAME:-pdf_extraction_db}
+    volumes:
+      - mongo_data:/data/db
+    expose:
+      - "27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     deploy:
       resources:
         limits:
-          cpus: "0.1"
-          memory: 128M
+          cpus: "0.5"
+          memory: 256M
 
-  storage:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: pdftrack-services:local
-    environment:
-      SERVICE_MODULE: services.storage.main:app
-      HOST: 0.0.0.0
-      PORT: 8003
-      HTTP_WORKERS: 1
-    expose:
-      - "8003"
-    restart: unless-stopped
-    cpus: 0.1
-    mem_limit: 128m
-    deploy:
-      resources:
-        limits:
-          cpus: "0.1"
-          memory: 128M
-
-  audit:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: pdftrack-services:local
-    environment:
-      SERVICE_MODULE: services.audit.main:app
-      HOST: 0.0.0.0
-      PORT: 8004
-      HTTP_WORKERS: 1
-    expose:
-      - "8004"
-    restart: unless-stopped
-    cpus: 0.1
-    mem_limit: 128m
-    deploy:
-      resources:
-        limits:
-          cpus: "0.1"
-          memory: 128M
-
-  search:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: pdftrack-services:local
-    environment:
-      SERVICE_MODULE: services.search.main:app
-      HOST: 0.0.0.0
-      PORT: 8005
-      HTTP_WORKERS: 1
-    expose:
-      - "8005"
-    restart: unless-stopped
-    cpus: 0.1
-    mem_limit: 128m
-    deploy:
-      resources:
-        limits:
-          cpus: "0.1"
-          memory: 128M
-
-  notifier:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: pdftrack-services:local
-    environment:
-      SERVICE_MODULE: services.notifier.main:app
-      HOST: 0.0.0.0
-      PORT: 8006
-      HTTP_WORKERS: 1
-    expose:
-      - "8006"
-    restart: unless-stopped
-    cpus: 0.1
-    mem_limit: 128m
-    deploy:
-      resources:
-        limits:
-          cpus: "0.1"
-          memory: 128M
-
+volumes:
+  mongo_data:
