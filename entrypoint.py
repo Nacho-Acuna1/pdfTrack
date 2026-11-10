@@ -22,6 +22,7 @@ def main() -> None:
         port=port,
         workers=workers,
         access_log=False,
+        timeout_graceful_shutdown=float(os.getenv("SHUTDOWN_TIMEOUT_SECONDS", "30.0")),
     )
 
 

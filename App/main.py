@@ -17,4 +17,12 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
     host = os.getenv("HOST", "0.0.0.0")
     workers = int(os.getenv("HTTP_WORKERS", "1"))
-    uvicorn.run("App.main:app", host=host, port=port, workers=workers)
+    from App.core.config import settings
+
+    uvicorn.run(
+        "App.main:app",
+        host=host,
+        port=port,
+        workers=workers,
+        timeout_graceful_shutdown=settings.SHUTDOWN_TIMEOUT_SECONDS,
+    )

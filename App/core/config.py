@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     EXTRACTION_QUEUE_SIZE: int = Field(default=1, ge=0, le=100)
     QUEUE_WAIT_TIMEOUT_SECONDS: float = Field(default=0.0, ge=0.0, le=30.0)
     EXTRACTION_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0.0, le=300.0)
+    SHUTDOWN_TIMEOUT_SECONDS: float = Field(default=30.0, ge=1.0, le=300.0)
     OVERLOAD_STATUS_CODE: int = 503
 
     MONGODB_ENABLED: bool = False

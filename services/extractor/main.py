@@ -32,6 +32,7 @@ async def lifespan(app: FastAPI):
         queue_size=settings.EXTRACTION_QUEUE_SIZE,
         queue_wait_timeout=settings.QUEUE_WAIT_TIMEOUT_SECONDS,
         extraction_timeout=settings.EXTRACTION_TIMEOUT_SECONDS,
+        shutdown_timeout=settings.SHUTDOWN_TIMEOUT_SECONDS,
     )
     app.state.extraction_runtime = runtime
     logger.info(
@@ -46,6 +47,13 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        logger.info(
+            "service_stopping",
+            extra={
+                "service": SERVICE_NAME,
+                "in_flight": runtime.in_flight,
+            },
+        )
         await runtime.close()
         logger.info("service_stopped", extra={"service": SERVICE_NAME})
 
@@ -110,5 +118,11 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", str(settings.PORT)))
     host = os.getenv("HOST", settings.HOST)
     workers = int(os.getenv("HTTP_WORKERS", str(settings.HTTP_WORKERS)))
-    uvicorn.run("services.extractor.main:app", host=host, port=port, workers=workers)
+    uvicorn.run(
+        "services.extractor.main:app",
+        host=host,
+        port=port,
+        workers=workers,
+        timeout_graceful_shutdown=settings.SHUTDOWN_TIMEOUT_SECONDS,
+    )
 

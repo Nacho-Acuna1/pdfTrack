@@ -11,9 +11,15 @@ services:
       - ./deploy/default.conf.template:/etc/nginx/templates/default.conf.template:ro
     depends_on:
       extractor:
-        condition: service_started
+        condition: service_healthy
       documents:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/health/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
     restart: unless-stopped
     cpus: 0.25
     mem_limit: 128m
@@ -39,9 +45,16 @@ services:
       QUEUE_WAIT_TIMEOUT_SECONDS: ${QUEUE_WAIT_TIMEOUT_SECONDS:-0}
       EXTRACTION_TIMEOUT_SECONDS: ${EXTRACTION_TIMEOUT_SECONDS:-30}
       OVERLOAD_STATUS_CODE: ${OVERLOAD_STATUS_CODE:-503}
+      SHUTDOWN_TIMEOUT_SECONDS: ${SHUTDOWN_TIMEOUT_SECONDS:-30}
       MONGODB_ENABLED: "false"
     expose:
       - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
     restart: unless-stopped
     init: true
     stop_grace_period: 35s
@@ -70,11 +83,18 @@ services:
       MONGODB_URL: ${MONGODB_URL:-mongodb://mongodb:27017}
       DATABASE_NAME: ${DATABASE_NAME:-pdf_extraction_db}
       MONGODB_TIMEOUT_MS: ${MONGODB_TIMEOUT_MS:-500}
+      SHUTDOWN_TIMEOUT_SECONDS: ${SHUTDOWN_TIMEOUT_SECONDS:-8}
     expose:
       - "8001"
     depends_on:
       mongodb:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
     restart: unless-stopped
     init: true
     stop_grace_period: 10s
